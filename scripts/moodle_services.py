@@ -1,16 +1,18 @@
 import requests, json, os
+from pathlib import Path
 import pandas as pd
 import subprocess
 from collections import namedtuple
 from utils import clean_text, log_generator
 from config import instance_params
+from download import main
+from moodle_services_post import tag_course
 
-MOODLE_UPLOAD_L_ = "/var/www/html/moodle/upload/L3"
+MOODLE_UPLOAD_L_ = instance_params["materials"]
 
 token = instance_params["token"]
 moodle_url = instance_params["url"] + "?wstoken=" + token + "&moodlewsrestformat=json"
 instance = instance_params["instance"]
-
 moosh_sudo = ""
 if instance == "prod":
     moosh_sudo = "sudo"
@@ -92,9 +94,10 @@ def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario
         serverurl = moodle_url + '&wsfunction=' + functionname 
         res = requests.post(serverurl, data=courses)
         moodle_courses = json.loads(res.content)
+        print(moodle_courses)
         update_dataframe(dataframe, "shortname", row[6], "idCourseMoodle", int(moodle_courses[0]["id"]))
         
-        for course in moodle_courses: 
+        for course in moodle_courses:
             if len(sections) > 0:
                 # Percorso Formativo
                 course_update_sections(course["id"], sections, subsections, activities, questionnaires, \
@@ -178,7 +181,6 @@ def course_update_sections(course_id, sections, df_subsections, df_activities,  
                     define_material(course_id, material, r, curr_id)
                 # Add activities inside section
                 activities = df_activities[(df_activities["IdUnit"] == subrow.Id_section) & (df_activities["IdCommunity"] == subrow.IdCommunity) & (df_activities["IdPath"] == subrow.IdPath) & (df_activities["DisplayOrder"] < int(subrow.DisplayOrder)) & (df_activities["DisplayOrder"] > prev_order) ]
-                print(activities)
                 add_course_modules(course_id, curr_id-1, activities, questionnaires, domande, df_domande_multichoice, df_domande_multichoice_opzioni, pages, \
                                    df_dropdown, df_domande_rating_options, df_domande_rating_headers, df_materiale)
                 prev_order = subrow.DisplayOrder
@@ -217,18 +219,6 @@ def get_scorms_by_courses():
     res = requests.post(serverurl, data=courses)
     return json.loads(res.content)
 
-def insert_scorm_tracks(scoid, attempt, tracks):
-    functionname = "mod_scorm_insert_scorm_tracks"
-    serverurl = moodle_url  + '&wsfunction=' + functionname 
-    all_tracks = {}
-    for row in tracks.itertuples():
-        all_tracks["tracks[{}][element]".format(row[0])] = row[1]
-        all_tracks["tracks[{}][value]".format(row[0])] = row[2]
-    print(all_tracks)
-    params  = {"scoid" : scoid, "attempt" : attempt}
-    res = requests.post(serverurl, params=params, data=all_tracks)
-    return json.loads(res.content)
-    
 def files_upload(params):
     functionname = "core_files_upload"
     serverurl = moodle_url  + '&wsfunction=' + functionname    
@@ -238,9 +228,14 @@ def files_upload(params):
     return res.content
       
 def add_module_scorm(course_id, section_id, name, path, duration_hours=0, duration_min=0, intro=""):
-    output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o "--packagefilepath={} \
+    if not os.path.exists(path):
+        output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o " \
     --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
-    --intro={} " scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, course_id), shell=True).decode("utf-8").strip()
+    --intro={} " scorm {}'.format(name, section_id, duration_hours, duration_min, intro, course_id), shell=True).decode("utf-8").strip()
+    else:
+        output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o "--packagefilepath={} \
+        --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
+        --intro={} " scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, course_id), shell=True).decode("utf-8").strip()
     return output
     
 def add_module_resource(course_id, section_id, name, path, duration_hours=0, duration_min=0, intro=""):
@@ -292,7 +287,7 @@ def add_module_questionnaire(course_id, section_id, questionnaires, domande, df_
                     opts.append(opt)
                 questions["questions[{}][headers]".format(i)] = '["' + '","'.join(opts) + '"]'
         res = requests.post(serverurl, params=params, data=questions)
-        res = json.loads(res.content)
+        res = res.json
         if 'exception' in res:
             log_generator(res)
         return 0
@@ -335,7 +330,6 @@ def add_course_modules(course_id, section_id, activities, questionnaires, domand
         elif row.CodeModule == "SRVQUST":
             questionnair = questionnaires[questionnaires["QSTN_Id"] == row.IdObjectLong].to_dict('records')
             doman_all = domande_all[domande_all["QSTN_Id"] == row.IdObjectLong].sort_values(by="LKQD_NumeroDomanda")
-            print(pages[(pages["QSML_QSTN_Id"] == row.IdObjectLong) & (pages["QSPG_NomePagina"].notna())] )
             pag = "@@".join(pages[(pages["QSML_QSTN_Id"] == row.IdObjectLong) & (pages["QSPG_NomePagina"].notna())]["QSPG_NomePagina"].to_dict().values())
             if len(questionnair) > 0:
                 if questionnair[0]["QSTN_Tipo"] == 7:
@@ -355,21 +349,26 @@ def define_material(course_id, material, row, section_id):
     module_id = 0
     module_type = ""
     if len(material) > 0:
+        # download resource files for activities
+        tag_course(course_id, 6)
+        main(course_id, MOODLE_UPLOAD_L_)
         is_scorm = int(material[0]["FLDS_isSCORM"])
         path = "{}/{}/{}.stored".format(MOODLE_UPLOAD_L_, int(material[0]["FLDS_CMNT_id"]), material[0]["FLDS_GUID"])
+        '''if not os.path.exists(path):
+            print("define_material: file " + path + " does not exist")
+            log_generator("define_material: file " + path + " does not exist")
+            return module_id, module_type
+            '''
+
         module_type = "scorm" if is_scorm == 1 else "resource"
         if is_scorm == 1:
-            if ~os.path.isfile(path):
-                path = "/var/www/html/moodle/01-Sicurezza_Info-Concetti_Generali.zip"
             module_id = add_module_scorm(course_id, section_id, material[0]["FLDS_nome"],
                              path,
                              duration_hours=row.customfield_duration_hours,
                              duration_min=row.customfield_duration_mins,
                              intro=row.Description)
         else:
-            if ~os.path.isfile(path):
-                path = "/var/www/html/moodle/development.pdf"
-            module_id =add_module_resource(course_id, section_id, material[0]["FLDS_nome"],
+            module_id = add_module_resource(course_id, section_id, material[0]["FLDS_nome"],
                                          path,
                                          duration_hours=row.customfield_duration_hours,
                                          duration_min=row.customfield_duration_mins,

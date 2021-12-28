@@ -1,6 +1,6 @@
 import pandas as pd
 from moodle_services import create_categories, core_course_create_courses, core_user_create_users, enrol_manual_enrol_users, core_user_delete_users
-from moodle_services_post import create_blocks, activities_dependencies, activities_completion
+from moodle_services_post import create_blocks, activities_dependencies, activities_completion, import_scorm_tracks, tag_courses, add_wikis
 from config import instance_params
 
 instance = instance_params["instance"]
@@ -49,7 +49,11 @@ def create_courses():
     df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv")
     df_materiale = pd.read_csv("../resources/courses/materiale.csv")
 
-    core_course_create_courses(courses, sections, sub_sections, df_diario, df_activities, df_questionnaires, \
+    #536, 1775,
+    temp = courses[courses['IdCommunity'].isin([118])]
+    #temp = courses[courses["shortname"] == "Gli_str_del_PAT_536_10398"]
+    #temp = courses.iloc[290:340, :] # on prod - questionnaire not imported 'Error writing to database'
+    core_course_create_courses(temp, sections, sub_sections, df_diario, df_activities, df_questionnaires, \
                                df_domande, df_domande_rating_options, df_domande_rating_headers, \
                                df_domande_multichoice, df_domande_multichoice_opzioni, df_pages, df_dropdown, df_materiale)
 
@@ -100,27 +104,69 @@ def enrol_users_to_courses():
     for block in df_user_course_enrolments:
         enrol_manual_enrol_users(block)
 
-  
-# PHASE 1      
-        
+def importing_scorm_tracks():
+    '''
+    Import scorm tracks
+    :return:
+    '''
+    df_materiale = pd.read_csv("../resources/courses/materiale.csv")
+    df_scorm_tracks = pd.read_csv("../resources/usage/scorm_tracks_pat.csv")
+    df_users = pd.read_csv("../resources/users/users_{}.csv".format(instance))
+    import_scorm_tracks(df_materiale, df_activities, df_scorm_tracks, df_users)
+
+def tagging_courses():
+    '''
+
+    :return:
+    '''
+    courses = pd.read_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance))
+    tag_courses(courses)
+
+def adding_wikis():
+    '''
+
+    :return:
+    '''
+    df_courses = pd.read_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance))
+    df_courses = df_courses[df_courses["IdCommunity"] == 102]
+    df_wiki = pd.read_csv("../resources/wiki/wiki.csv")
+    df_wiki_sections = pd.read_csv("../resources/wiki/wiki_sections.csv")
+    df_topics = pd.read_csv("../resources/wiki/wiki_topics.csv")
+    df_topics_history = pd.read_csv("../resources/wiki/wiki_topic_hist.csv")
+    df_users = pd.read_csv("../resources/users/users_{}.csv".format(instance))
+    df_materiale = pd.read_csv("../resources/courses/materiale.csv")
+    add_wikis(df_courses, df_wiki, df_wiki_sections, df_topics, df_topics_history, df_users, df_materiale)
+
+
 ############################## STEP 1: Delete existing users
-delete_users()
+#delete_users()
 ############################## STEP 2: Create users
-create_users()
+#create_users()
 ############################## STEP 3: Create Categories
-create_all_categories()
+#create_all_categories()
 ############################## STEP 4: Create Courses
-create_courses()
+#create_courses()
 
 # PHASE 2
 
 ############################## STEP 5: Apply activities dependencies
-config_activities_dependencies()
+#config_activities_dependencies()
 ############################## STEP 6: Config Blocks
-config_blocks()
+#config_blocks()
 ############################## STEP 7: Generate enrolments list
-generate_enrolments_list()
+#generate_enrolments_list()
 ############################## STEP 8: Enrol users to courses
-enrol_users_to_courses()
+#enrol_users_to_courses()
 ############################## STEP 9: Update activities completion for each user
-completion_status()
+#completion_status()
+
+
+# PHASE 3
+
+############################## STEP 10: Import scorm tracks
+#importing_scorm_tracks()
+
+#tagging_courses()
+
+############################à# STEP 11: Import wiki
+adding_wikis()
