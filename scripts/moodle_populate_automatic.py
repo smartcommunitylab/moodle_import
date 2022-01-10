@@ -1,6 +1,8 @@
 import pandas as pd
-from moodle_services import create_categories, core_course_create_courses, core_user_create_users, enrol_manual_enrol_users, core_user_delete_users
+import multiprocessing as mp
+from moodle_services import create_categories, core_course_create_courses, core_user_create_users, enrol_manual_enrol_users, core_user_delete_users, core_cohort_create_cohorts
 from moodle_services_post import create_blocks, activities_dependencies, activities_completion, import_scorm_tracks, tag_courses, add_wikis
+from utils import role_mapping
 from config import instance_params
 
 instance = instance_params["instance"]
@@ -14,12 +16,21 @@ def delete_users():
     df_users_instance = pd.read_csv("../resources/users/users_{}.csv".format(instance))
     core_user_delete_users(df_users_instance["moodleUserId"])
 
+def creating_users(df):
+    core_user_create_users(df)
+
 def create_users():
     '''
     Create users
     '''
-    df_users = pd.read_csv("../resources/users/users.csv")
-    core_user_create_users(df_users)
+    pool = mp.Pool(4) # use 4 processes
+
+    df_users = pd.read_csv("../resources/users/users.csv", nrows=2)
+    df_users = pd.read_csv("../resources/users/users.csv", chunksize=100) # , names=df_users.columns, skiprows=41353
+    for blocks in df_users:
+        #pool.apply_async(creating_users,[blocks])
+        core_user_create_users(blocks)
+
 
 def create_all_categories():
     '''
@@ -32,7 +43,7 @@ def create_courses():
     '''
     Create Courses
     '''
-    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv".format())
+    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv".format(), chunksize=50)
     sections = pd.read_csv("../resources/courses/courses_sections.csv")
     sections["Description"] = sections["Description"].fillna("")
     sub_sections = pd.read_csv("../resources/courses/courses_sections_sub.csv")
@@ -49,13 +60,15 @@ def create_courses():
     df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv")
     df_materiale = pd.read_csv("../resources/courses/materiale.csv")
 
-    #536, 1775,
-    temp = courses[courses['IdCommunity'].isin([118])]
-    #temp = courses[courses["shortname"] == "Gli_str_del_PAT_536_10398"]
-    #temp = courses.iloc[290:340, :] # on prod - questionnaire not imported 'Error writing to database'
-    core_course_create_courses(temp, sections, sub_sections, df_diario, df_activities, df_questionnaires, \
-                               df_domande, df_domande_rating_options, df_domande_rating_headers, \
-                               df_domande_multichoice, df_domande_multichoice_opzioni, df_pages, df_dropdown, df_materiale)
+    for block in courses:
+        #536, 1775,
+        temp = block[block['IdCommunity'].isin([120])]
+        #temp = courses[courses["shortname"] == "Gli_str_del_PAT_536_10398"]
+        #temp = courses.iloc[290:340, :] # on prod - questionnaire not imported 'Error writing to database'
+        #courses.iloc[383:385, :]
+        core_course_create_courses(block, sections, sub_sections, df_diario, df_activities, df_questionnaires, \
+                                   df_domande, df_domande_rating_options, df_domande_rating_headers, \
+                                   df_domande_multichoice, df_domande_multichoice_opzioni, df_pages, df_dropdown, df_materiale)
 
 def config_blocks():
     '''
@@ -83,17 +96,20 @@ def generate_enrolments_list():
     '''
     Generate enrolments list
     '''
+    df_tipo_ruolo = pd.read_csv("../resources/users/TIPO_RUOLO.csv")
     df_users = pd.read_csv("../resources/users/users.csv")
-    df_iscrizioni = pd.read_csv('../../user_roles/LK_RUOLO_PERSONA_COMUNITA.csv')
+    df_iscrizioni = pd.read_csv('../resources/users/LK_RUOLO_PERSONA_COMUNITA.csv')
     df_iscrizioni = df_iscrizioni[df_iscrizioni["RLPC_PRSN_id"].isin(df_users['PRSN_id'])]
     df_iscrizioni = df_iscrizioni[['RLPC_CMNT_id', 'RLPC_PRSN_id', 'RLPC_TPRL_id', 'RLPC_responsabile', 'RLPC_attivato', 'RLPC_abilitato']]
+    df_iscrizioni = df_iscrizioni.merge(df_tipo_ruolo, left_on="RLPC_TPRL_id", right_on="TPRL_id")
+    df_iscrizioni["roleId"] = df_iscrizioni["RLPC_TPRL_id"].apply(lambda x: role_mapping(x))
 
     df_courses_pat_moodle = pd.read_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance))
-    df_com_iscriz = df_courses_pat_moodle.merge(df_iscrizioni, left_on="IdCommunity", right_on="RLPC_CMNT_id")
+    df_com_iscriz = df_courses_pat_moodle.merge(df_iscrizioni[df_iscrizioni["roleId"] != 0], left_on="IdCommunity", right_on="RLPC_CMNT_id")
 
     df_user_moodle = pd.read_csv("../resources/users/users_{}.csv".format(instance))
     df_com_iscriz_user = df_com_iscriz.merge(df_user_moodle, left_on="RLPC_PRSN_id", right_on="PRSN_id")
-    result_df = df_com_iscriz_user[["idCourseMoodle", "moodleUserId"]]
+    result_df = df_com_iscriz_user[["idCourseMoodle", "moodleUserId", "roleId"]]
     result_df.to_csv("../resources/users/enrolments_{}.csv".format(instance), index=False)
 
 def enrol_users_to_courses():
@@ -103,6 +119,12 @@ def enrol_users_to_courses():
     df_user_course_enrolments = pd.read_csv("../resources/users/enrolments_{}.csv".format(instance), chunksize=200)
     for block in df_user_course_enrolments:
         enrol_manual_enrol_users(block)
+
+def create_cohorts():
+    courses = pd.read_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance))
+    cohorts = pd.read_csv("../resources/users/cohorts.csv", chunksize=50)
+    for block in cohorts:
+        core_cohort_create_cohorts(block, courses)
 
 def importing_scorm_tracks():
     '''
@@ -128,15 +150,15 @@ def adding_wikis():
     :return:
     '''
     df_courses = pd.read_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance))
-    df_courses = df_courses[df_courses["IdCommunity"] == 102]
     df_wiki = pd.read_csv("../resources/wiki/wiki.csv")
     df_wiki_sections = pd.read_csv("../resources/wiki/wiki_sections.csv")
     df_topics = pd.read_csv("../resources/wiki/wiki_topics.csv")
     df_topics_history = pd.read_csv("../resources/wiki/wiki_topic_hist.csv")
     df_users = pd.read_csv("../resources/users/users_{}.csv".format(instance))
     df_materiale = pd.read_csv("../resources/courses/materiale.csv")
+    # DEM_Cor_27_132
+    # [df_courses["shortname"] == "For_P_I_120"]
     add_wikis(df_courses, df_wiki, df_wiki_sections, df_topics, df_topics_history, df_users, df_materiale)
-
 
 ############################## STEP 1: Delete existing users
 #delete_users()
@@ -168,5 +190,6 @@ def adding_wikis():
 
 #tagging_courses()
 
-############################à# STEP 11: Import wiki
+############################# STEP 11: Import wiki
 adding_wikis()
+
