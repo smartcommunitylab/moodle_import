@@ -1,9 +1,10 @@
 import requests, json, os
+import pandas as pd
 from bs4 import BeautifulSoup
 from isodate import parse_duration
 from collections import namedtuple
 from config import instance_params
-from moodle_services import define_material
+from moodle_services import define_material, tag_course
 from utils import extract_file_id, log_generator, generate_activity_link, ENDPOINT_MODULE, SCORM_PLAYER, SCORM_PLAYER_OLD, FILE_REPO
 
 MOODLE_UPLOAD_L_ = instance_params["materials"]
@@ -19,6 +20,7 @@ def create_blocks(df_courses):
         res = requests.post(serverurl, params=params)
         print(res.content)
         result = json.loads(res.content)
+########################################################################## Stivities services
 
 def activities_dependencies(df_activities, df_dependencies):
     functionname = "local_modcustomfields_update_activity_dependency"
@@ -46,57 +48,22 @@ def activities_dependencies(df_activities, df_dependencies):
 
 def activities_completion(df_activities, df_users, df_status):
     df_activities = df_activities[(df_activities["IdMoodle"].notna()) & (df_activities["IdMoodle"] != 0)]
-    print(df_activities)
     for activity in df_activities.itertuples():
         moodle_activity_id = activity.IdMoodle
         module_name = activity.moduleMoodle
         l3_activity_id = activity.Id # Id of the subactivity
-        print(l3_activity_id)
         # Find the proper course module id
         if moodle_activity_id != 0:
             cmid = get_course_module_by_instance(module_name, moodle_activity_id)
-        # Filter completion status of the activity for all users
-        status_of_activity = df_status[(df_status["IdSubActivity"] == l3_activity_id) & (df_status["Completion"] == 100)]
-        status_of_activity = status_of_activity.merge(df_users, left_on="IdPerson", right_on="PRSN_id")
-        print(status_of_activity)
-        for usage in status_of_activity.itertuples():
-            user_moodle = usage.moodleUserId
-            activities_completion_request(user_moodle, cmid, usage.time)
-
-def import_scorm_tracks(df_file, df_activities, df_scorm_tracks, df_users):
-    activities = df_activities[df_activities["moduleMoodle"] == "scorm"]
-    for activity in activities.itertuples():
-        id_instance = activity.IdMoodle
-        id_materiale = activity.IdObjectLong
-        file = df_file[df_file["FLDS_id"] == id_materiale].to_dict('records')
-        if len(file) > 0:
-            file_guid = file[0]["FLDS_GUID"]
-            # Find Moodle sco activities inside each file scorm
-            moodle_scoes = mod_scorm_get_scorm_scoes(id_instance)
-            #print(moodle_scoes)
-            for sco in moodle_scoes["scoes"]:
-                if sco["scormtype"] == "sco":
-                    # Find L3 sco activities
-                    #print(file_guid , sco["identifier"])
-                    scorm_tracks = df_scorm_tracks[(df_scorm_tracks["fileguid"] == file_guid) & (df_scorm_tracks["ACTIVITY_ID"] == sco["identifier"].encode('utf-8').strip())]
-                    scorm_tracks_users = scorm_tracks.merge(df_users, left_on="LEARNER_ID", right_on="PRSN_id")
-                    #print(scorm_tracks_users)
-                    for index, track in enumerate(scorm_tracks_users.itertuples()):
-                        xml = track.XML
-                        user_id = track.moodleUserId
-                        soup = BeautifulSoup(xml, 'html.parser')
-                        tracks = {
-                            "x.start.time" : int(track.time),
-                            "cmi.core.lesson_status" : soup.lessonstatus.text if soup.lessonstatus is not None else "",
-                            "cmi.success_status" : soup.successstatus.text if soup.successstatus is not None else "",
-                            "cmi.completion_status" : soup.completionstatus.text if soup.completionstatus is not None else "",
-                            "cmi.core.exit" : soup.exit.text if soup.exit is not None else "",
-                            "cmi.suspend_data" : soup.suspenddata.text if soup.suspenddata is not None else "",
-                            "cmi.core.total_time" : str(parse_duration(soup.totaltime.text)) if soup.totaltime is not None else "",
-                            "cmi.core.session_time" : str(parse_duration(soup.sessiontime.text)) if soup.sessiontime is not None else "",
-                            "cmi.core.score.raw" : soup.score.text if soup.score is not None else ""
-                        }
-                        insert_scorm_tracks(sco["id"], 1, user_id, int(track.time), tracks)
+            if cmid == 0:
+                continue
+            # Filter completion status of the activity for all users
+            status_of_activity = df_status[(df_status["IdSubActivity"] == l3_activity_id) & (df_status["Completion"] == 100)]
+            status_of_activity = status_of_activity.merge(df_users, left_on="IdPerson", right_on="PRSN_id")
+            print(status_of_activity)
+            for usage in status_of_activity.itertuples():
+                user_moodle = usage.moodleUserId
+                activities_completion_request(user_moodle, cmid, usage.time)
 
 def activities_completion_request(userid, cmid, time):
     functionname = "core_completion_override_activity_completion_status"
@@ -107,15 +74,60 @@ def activities_completion_request(userid, cmid, time):
     result = json.loads(res.content)
 
 def get_course_module_by_instance(module, instance):
-    functionname = "core_course_get_course_module_by_instance"
-    serverurl = moodle_url  + '&wsfunction=' + functionname
-    params ={"module" : module, "instance" : int(instance)}
-    res = requests.post(serverurl, params=params)
-    result = json.loads(res.content)
-    print(result)
-    return result["cm"]["id"]
+    try:
+        functionname = "core_course_get_course_module_by_instance"
+        serverurl = moodle_url  + '&wsfunction=' + functionname
+        params ={"module" : module, "instance" : int(instance)}
+        res = requests.post(serverurl, params=params)
+        result = json.loads(res.content)
+        print(result)
+        return result["cm"]["id"]
+    except Exception as err:
+        print("get_course_module_by_instance {} {}: {}".format(module, instance, err))
+        log_generator(err, "get_course_module_by_instance {} {}".format(module, instance))
+        return 0
 
 ################################################################################### SCORM Services
+
+def import_scorm_tracks(df_file, df_activities, df_scorm_tracks, df_users):
+    activities = df_activities[(df_activities["moduleMoodle"] == "scorm") & (df_activities["IdCommunity"] == 1775)]
+    #print(activities)
+    for activity in activities.itertuples():
+        id_instance = activity.IdMoodle
+        id_materiale = activity.IdObjectLong
+        file = df_file[df_file["FLDS_id"] == id_materiale].to_dict('records')
+        if len(file) > 0:
+            file_guid = file[0]["FLDS_GUID"]
+            #print(df_scorm_tracks[(df_scorm_tracks["fileguid"] == file_guid)][["fileguid", "ACTIVITY_ID"]])
+            # Find Moodle sco activities inside each file scorm
+            moodle_scoes = mod_scorm_get_scorm_scoes(id_instance)
+            #print(moodle_scoes)
+            for sco in moodle_scoes["scoes"]:
+                if sco["scormtype"] == "sco":
+                    # Find L3 sco activities
+                    #print(file_guid , sco["identifier"])
+                    scorm_tracks = df_scorm_tracks[(df_scorm_tracks["fileguid"] == file_guid) & (df_scorm_tracks["ACTIVITY_ID"] == sco["identifier"])]
+                    #.encode('utf-8').strip()
+                    scorm_users = df_users[df_users["PRSN_id"].isin(scorm_tracks["LEARNER_ID"])]
+                    for user  in scorm_users.itertuples():
+                        scorm_tracks_users = scorm_tracks[scorm_tracks["LEARNER_ID"] == user.PRSN_id] #.merge(df_users, left_on="LEARNER_ID", right_on="PRSN_id")
+                        #print(scorm_tracks_users)
+                        for index, track in enumerate(scorm_tracks_users.itertuples()):
+                            xml = track.XML
+                            user_id = user.moodleUserId
+                            soup = BeautifulSoup(xml, 'html.parser')
+                            tracks = {
+                                "x.start.time" : int(track.time),
+                                "cmi.core.lesson_status" : soup.lessonstatus.text if soup.lessonstatus is not None else "",
+                                "cmi.success_status" : soup.successstatus.text if soup.successstatus is not None else "",
+                                "cmi.completion_status" : soup.completionstatus.text if soup.completionstatus is not None else "",
+                                "cmi.core.exit" : soup.exit.text if soup.exit is not None else "",
+                                "cmi.suspend_data" : soup.suspenddata.text if soup.suspenddata is not None else "",
+                                "cmi.core.total_time" : str(parse_duration(soup.totaltime.text)) if soup.totaltime is not None else "",
+                                "cmi.core.session_time" : str(parse_duration(soup.sessiontime.text)) if soup.sessiontime is not None else "",
+                                "cmi.core.score.raw" : soup.score.text if soup.score is not None else ""
+                            }
+                            insert_scorm_tracks(sco["id"], index + 1, user_id, int(track.time), tracks)
 
 def insert_scorm_tracks(scoid, attempt, user_id, time, tracks):
     functionname = "local_modcustomfields_insert_scorm_tracks"
@@ -126,7 +138,7 @@ def insert_scorm_tracks(scoid, attempt, user_id, time, tracks):
         all_tracks["tracks[{}][element]".format(iter)] = key
         all_tracks["tracks[{}][value]".format(iter)] = val
         iter = iter + 1
-    params  = {"scoid" : scoid, "attempt" : attempt, "userid" : user_id, "time" : time}
+    params  = {"scoid" : int(scoid), "attempt" : attempt, "userid" : int(user_id), "time" : time}
     print(params)
     res = requests.post(serverurl, params=params, data=all_tracks)
     print(res.content)
@@ -137,14 +149,6 @@ def mod_scorm_get_scorm_scoes(scorm_id):
     serverurl = moodle_url  + '&wsfunction=' + functionname
     params  = {"scormid" : int(scorm_id)}
     res = requests.post(serverurl, params=params)
-    return json.loads(res.content)
-
-def tag_course(course_id, tag_id):
-    functionname = "local_modcustomfields_tag_course"
-    serverurl = moodle_url  + '&wsfunction=' + functionname
-    params  = {"courseid" : int(course_id), "tagid" : int(tag_id)}
-    res = requests.post(serverurl, params=params)
-    print(res.content)
     return json.loads(res.content)
 
 def tag_courses(df_courses):
@@ -160,6 +164,7 @@ def add_wiki(course_id, name, desc, content, user_id):
     functionname = "local_modcustomfields_add_wiki"
     serverurl = moodle_url  + '&wsfunction=' + functionname
     params  = {"courseid" : int(course_id), "name" : name, "desc" : desc, "content" : content, "userid" : user_id}
+    print(params)
     res = requests.post(serverurl, params=params)
     print(res.content)
     return json.loads(res.content)
@@ -190,15 +195,19 @@ def add_wikis(df_courses, df_wiki, df_wiki_sections, df_topics, df_topics_histor
     df_wiki = df_wiki.merge(df_courses, left_on="WIKI_CMNT_id", right_on="IdCommunity")
     for wiki in df_wiki.itertuples():
         print(wiki.WIKI_id)
-        sections = df_wiki_sections[df_wiki_sections["WKSZ_WIKI_id"] == wiki.WIKI_id].sort_values(by="WKSZ_dataInserimento")
+        sections = df_wiki_sections[df_wiki_sections["WKSZ_WIKI_id"] == wiki.WIKI_id].sort_values(by="WKSZ_nome")
         sections = sections.merge(df_users, left_on="WKSZ_PRSN_id", right_on="PRSN_id")
         sections_titles = ""
         user_id = 2
         wiki_name = wiki.WIKI_nome
         if len(sections) > 0:
             sections_titles = "</br></br>".join(sections["WKSZ_nome"].apply(lambda x: "<h1>[[" + x + "]]</h1>").tolist())
-            user_id = sections.loc[sections["WKSZ_isDefault"] == 1, :]["moodleUserId"]
-            wiki_name = sections.loc[sections["WKSZ_isDefault"] == 1, :]["WKSZ_nome"]
+            if len(sections.loc[sections["WKSZ_isDefault"] == 1, :]) > 0:
+                user_id = sections.loc[sections["WKSZ_isDefault"] == 1, :].to_dict('records')[0]["moodleUserId"]
+                wiki_name = sections.loc[sections["WKSZ_isDefault"] == 1, :].to_dict('records')[0]["WKSZ_nome"]
+            else:
+                user_id = sections.iloc[0, :]["moodleUserId"]
+                wiki_name = sections.iloc[0, :]["WKSZ_nome"]
         # create wiki
         wiki_id = add_wiki(wiki.idCourseMoodle, wiki.WIKI_nome, wiki_name, sections_titles, user_id)["id"]
         for section in sections.itertuples():
@@ -259,7 +268,7 @@ def extract_resource(href, df_materiale, idCourseMoodle, row, resources):
             file_id = extract_file_id(parts[1], "FileID")
         if file_id not in resources.keys():
             material = df_materiale[df_materiale["FLDS_id"] == int(file_id)].to_dict('records')
-            module_id, module_type = define_material(idCourseMoodle, material, row, 0, stealth=1)
+            module_id, module_type = define_material(idCourseMoodle, material, row, 0, stealth=1, service="wiki")
             cm_id = get_course_module_by_instance(module_type, module_id)
             link = generate_activity_link(cm_id, module_type)
             resources[file_id] = link
@@ -268,6 +277,25 @@ def extract_resource(href, df_materiale, idCourseMoodle, row, resources):
     return link
 
 #################################################################################### QUIZ RESPONSES services
+
+def questionnaire_import_responses_quiz(df_questionnaire, df_users, df_risposte_domande_random_quiz, df_risposte_multichoice):
+    df_quiz_activities = df_questionnaire[df_questionnaire["IdMoodle"] != 0]
+    print(df_quiz_activities)
+    for quiz in df_quiz_activities.itertuples():
+        domande = df_risposte_domande_random_quiz[df_risposte_domande_random_quiz["RSQS_QSTN_Id"] == quiz.QSTN_Id]
+        if len(domande) > 0:
+            print(domande)
+            users = df_users[df_users["PRSN_id"].isin(domande["RSQS_PRSN_Id"])].drop_duplicates(subset=["PRSN_id"])
+            for user in users.itertuples():
+                domande_of_user = domande[domande["RSQS_PRSN_Id"] == user.PRSN_id]
+                print(domande_of_user)
+                if len(domande_of_user) > 0:
+                    # Start new attempt by forcing questions
+                    attempt = mod_quiz_start_attempt(quiz.IdMoodle, int(user.moodleUserId), domande_of_user, domande_of_user.to_dict('records')[0]["time_start"])
+                    # Populate the responses of the questions
+                    answers = df_risposte_multichoice.merge(domande_of_user, left_on=["RSOM_RSQS_Id", "DMMT_DMML_Id"], right_on=["RSQS_Id", "DMML_Id"])
+                    process_quiz_attempt(attempt["id"], attempt["uniqueid"], answers, domande_of_user.to_dict('records')[0]["time_end"])
+
 def save_quiz_attempt(attempt_id):
     functionname = "mod_quiz_save_attempt"
     serverurl = moodle_url  + '&wsfunction=' + functionname
@@ -287,44 +315,39 @@ def save_quiz_attempt(attempt_id):
     print(res.content)
     return json.loads(res.content)
 
-def process_quiz_attempt(attempt_id, attempt_unique_id):
+def process_quiz_attempt(attempt_id, attempt_unique_id, df_answers, time_end):
     functionname = "mod_quiz_process_attempt"
     serverurl = moodle_url  + '&wsfunction=' + functionname
-    params  = {"attemptid" : attempt_id, "finishattempt":"1", }
-    versions = {}
-    versions["data[{}][name]".format(0)] = "q{}:1_answer".format(attempt_unique_id)
-    versions["data[{}][value]".format(0)] = "1"
-    versions["data[{}][name]".format(1)] = "q{}:1_:sequencecheck".format(attempt_unique_id)
-    versions["data[{}][value]".format(1)] = "1"
-    versions["data[{}][name]".format(2)] = "q{}:2_answer".format(attempt_unique_id)
-    versions["data[{}][value]".format(2)] = "0"
-    versions["data[{}][name]".format(3)] = "q{}:2_:sequencecheck".format(attempt_unique_id)
-    versions["data[{}][value]".format(3)] = "1"
-    versions["data[{}][name]".format(4)] = "q{}:3_answer".format(attempt_unique_id)
-    versions["data[{}][value]".format(4)] = "2"
-    versions["data[{}][name]".format(5)] = "q{}:3_:sequencecheck".format(attempt_unique_id)
-    versions["data[{}][value]".format(5)] = "1"
-    versions["data[{}][name]".format(6)] = "q{}:4_answer".format(attempt_unique_id)
-    versions["data[{}][value]".format(6)] = "1"
-    versions["data[{}][name]".format(7)] = "q{}:4_:sequencecheck".format(attempt_unique_id)
-    versions["data[{}][value]".format(7)] = "1"
-    res = requests.post(serverurl, params=params, data=versions)
+    params  = {"attemptid" : attempt_id, "finishattempt":"1", "time_end" : time_end}
+    data = {}
+    iter = 0
+    for answer in df_answers.itertuples():
+        data["data[{}][name]".format(iter)] = "q{}:{}_answer".format(attempt_unique_id, answer.LKQD_NumeroDomanda)
+        data["data[{}][value]".format(iter)] = "{}".format(int(answer.DMMO_NumeroOpzione) - 1)
+        iter = iter + 1
+        data["data[{}][name]".format(iter)] = "q{}:{}_:sequencecheck".format(attempt_unique_id, answer.LKQD_NumeroDomanda)
+        data["data[{}][value]".format(iter)] = "1"
+        iter = iter + 1
+    res = requests.post(serverurl, params=params, data=data)
+    print(res.content)
     res = json.loads(res.content)
-    print(res)
     return res
 
-def mod_quiz_start_attempt(quizid):
+def mod_quiz_start_attempt(quizid, user_id, questions_list, time_start):
     functionname = "mod_quiz_start_attempt"
     serverurl = moodle_url  + '&wsfunction=' + functionname
-    params  = {"quizid" : quizid} #, "forcenew":1
-    res = requests.post(serverurl, params=params)
+    params  = {"quizid" : int(quizid), "userid" : user_id, "time_start" : time_start}
+    forcequestions = {}
+    for i, question in enumerate(questions_list.itertuples()):
+        forcequestions["forcequestions[{}][slot]".format(i)] = int(question.LKQD_NumeroDomanda)
+        forcequestions["forcequestions[{}][value]".format(i)] = question.DMML_Testo
+    res = requests.post(serverurl, params=params, data=forcequestions)
+    print(res.content)
     res = json.loads(res.content)
-    print(res)
     if "exception" in res:
         print(res["message"])
         return res["message"]
     return res["attempt"]
-
 
 def mod_quiz_get_attempt_data(attempt_id):
     functionname = "mod_quiz_get_attempt_data"
@@ -349,26 +372,48 @@ def mod_quiz_get_attempt_data(attempt_id):
         return res["message"]
     return res
 
-def mod_questionnaire_submit_questionnaire_response(questionnaireid, userid, cmid, sec):
-    functionname = "mod_questionnaire_submit_questionnaire_response"
+############################################################################ Questionnaire Responses Services
+
+def questionnaire_import_responses_questionnaire(df_questionnaire, df_users, df_risposte_domande_questionnaire, df_risposte_multichoice, df_domande, df_risposte_rating, df_risposte_short_answer):
+    df_quiz_activities = df_questionnaire[df_questionnaire["IdMoodle"] != 0]
+    print(df_quiz_activities)
+    for questionnaire in df_quiz_activities.itertuples():
+        domande = df_risposte_domande_questionnaire[df_risposte_domande_questionnaire["RSQS_QSTN_Id"] == questionnaire.QSTN_Id]
+        if len(domande) > 0:
+            print(domande)
+            users = df_users[df_users["PRSN_id"].isin(domande["RSQS_PRSN_Id"])].drop_duplicates(subset=["PRSN_id"])
+            for user in users.itertuples():
+                domande_of_user = domande[domande["RSQS_PRSN_Id"] == user.PRSN_id]
+                # get responses of rating questions
+                domande_of_user_rating = domande_of_user.merge(df_risposte_rating, left_on=["RSQS_Id", "DMML_Id"], right_on=["RSRT_RSQS_Id", "DMRT_DMML_Id"])
+                temp = pd.DataFrame(domande_of_user_rating.groupby("DMRT_DMML_Id")["option"].apply(';;;'.join))
+                temp = temp.reset_index()
+                answers_rating = temp.merge(df_domande, left_on="DMRT_DMML_Id", right_on="DMML_Id")
+                # get responses of short answer questions
+                answers_of_user_short_answer = domande_of_user.merge(df_risposte_short_answer, left_on=["RSQS_Id", "DMML_Id"], right_on=["RSTL_RSQS_Id", "DMML_Id"])
+                print(answers_of_user_short_answer)
+                # get responses of multichoice
+                #domande_of_user_multichoice = domande_of_user.merge(df_domande_rating, left_on="DMML_Id", right_on="DMRT_DMML_Id")
+                print(answers_rating)
+                if len(answers_rating) > 0:
+                    print(answers_rating["option"].to_dict())
+                    # Submit questionnaire responses
+                    mod_questionnaire_submit_questionnaire_response(questionnaire.IdMoodle, int(user.moodleUserId), domande_of_user.to_dict('records')[0]["time_start"], answers_rating, answers_of_user_short_answer)
+
+def mod_questionnaire_submit_questionnaire_response(questionnaireid, userid, time, answers_rating, answers_of_user_short_answer):
+    functionname = "local_modcustomfields_generate_questionnaire_responses"
     serverurl = moodle_url  + '&wsfunction=' + functionname
-    params  = {"questionnaireid" : questionnaireid, "surveyid":questionnaireid, "userid": userid, "cmid": cmid, "sec":sec, "completed":1, \
-               "rid": 24, "submit": 1, "action": "submit"}
-    responses = {}
-    responses["responses[{}][name]".format(0)] = "q1_2".format()
-    responses["responses[{}][value]".format(0)] = "1"
-    res = requests.post(serverurl, params=params, data=responses)
-    res = json.loads(res.content)
-    print(res)
-    if "exception" in res:
-        print(res["message"])
-        return res["message"]
-    return res
-
-#attempt_id = mod_quiz_start_attempt(276) #attempt_id=66
-#mod_quiz_get_attempt_data(attempt_id)
-#process_quiz_attempt(attempt_id["id"], attempt_unique_id["uniqueid"])
-#save_quiz_attempt(attempt_id)
-
-#questionnaire responses
-#mod_questionnaire_submit_questionnaire_response(816, 2, 13814,0)
+    params  = {"questionnaireid" : questionnaireid, "userid": userid, "time": time}
+    questions = {}
+    iter = 0
+    for answer in answers_rating.itertuples():
+        questions["questions[{}][name]".format(iter)] = answer.DMML_Testo
+        questions["questions[{}][values]".format(iter)] = answer.option
+        iter = iter + 1
+    for answer in answers_of_user_short_answer.itertuples():
+        questions["questions[{}][name]".format(iter)] = answer.DMML_Testo
+        questions["questions[{}][values]".format(iter)] = answer.RSTL_Testo
+        iter = iter + 1
+    print(questions)
+    res = requests.post(serverurl, params=params, data=questions)
+    print(res.content)
