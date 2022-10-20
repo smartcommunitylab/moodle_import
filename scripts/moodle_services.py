@@ -1,6 +1,7 @@
 import requests, json, os, sys, re, html
 from pathlib import Path
 import pandas as pd
+import numpy as np
 import subprocess
 from collections import namedtuple
 from utils import clean_text, log_generator
@@ -16,9 +17,18 @@ instance = instance_params["instance"]
 moosh_sudo = ""
 if instance == "prod":
     moosh_sudo = "sudo"
+
+df_courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv")
 df_activities = pd.read_csv("../resources/courses/courses_activities.csv")
 df_materiale = pd.read_csv("../resources/courses/materiale.csv")
-df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv")
+diario_material = pd.read_csv("../resources/courses/diario_material.csv")
+df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv", converters={"QSML_Descrizione": str})
+df_librerie = pd.read_csv("../resources/questionnaire/df_librerie.csv")
+
+df_domande = pd.read_csv("../resources/questionnaire/domande.csv")
+df_domande_multichoice = pd.read_csv("../resources/questionnaire/domande_multichoice.csv")
+df_domande_multichoice_opzioni = pd.read_csv("../resources/questionnaire/domande_multichoice_opzioni.csv")
+df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv")
 
 ############################################################## Categories & Courses Services ###################################################
 def get_category(category_name):
@@ -47,33 +57,44 @@ def core_course_create_categories(category_name, parent):
     categories["categories[{}][parent]".format(0)] = parent
     serverurl = moodle_url  + '&wsfunction=' + functionname 
     res = requests.post(serverurl, data=categories)
-    return res.content
+    return json.loads(res.content)
     
 def create_categories(dataframe):
     for row in dataframe.itertuples():
         parent = get_category(row[4])
         if parent == -1:
             parent = 0 # if parent does not exist then include it inside root category
-        if get_category(row[3]) == -1:
-            core_course_create_categories(row[3], parent)
+        current = get_category(row[3])
+        if current == -1:
+            categ_resp = core_course_create_categories(row[3], parent)
+            print("category creation: {}".format(categ_resp))
+            create_question_bank(row[1], categ_resp[0]["id"])
+        else:
+            print("category update: {}".format(categ_resp))
+            create_question_bank(row[1], current)
+
 
 def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario, df_activities, \
                                df_domande, df_domande_rating_options, df_domande_rating_headers, df_domande_multichoice, df_domande_multichoice_opzioni, pages, \
-                               df_dropdown):
+                               df_dropdown, container=False):
     try:
         for row in dataframe.itertuples():
             print(row)
             sections = df_sections[(df_sections["IdCommunity"] == row[1]) & (df_sections["IdPath"] == row[5])].sort_values(by="DisplayOrder")
             subsections = df_subsections[df_subsections["Id_section"].isin(sections["Id"])].sort_values(by="DisplayOrder")
-            path_activities = df_activities[(df_activities["IdCommunity"]  == row[1])]
-            activities = df_activities[(df_activities["IdCommunity"]  == row[1]) & (df_activities["IdPath"] == row[5])]
+            path_activities = df_activities[(df_activities["IdCommunity"] == row[1])]
+            activities = df_activities[(df_activities["IdCommunity"] == row[1]) & (df_activities["IdPath"] == row[5])]
             diario = df_diario[df_diario["EVNT_CMNT_id"] == row[1]]
-            questionnaires = df_questionnaires[df_questionnaires["QSGR_CMNT_Id"] == row[1]]
+            if container:
+                questionnaires = df_questionnaires[(df_questionnaires["QSGR_CMNT_Id"] == row[1]) & (df_questionnaires["IdMoodle"] == 0)]
+                materiale = df_materiale[df_materiale["FLDS_CMNT_id"] == -1] # nothing to create in case of container courses
+            else:
+                questionnaires = df_questionnaires[df_questionnaires["QSGR_CMNT_Id"] == row[1]]
+                materiale = df_materiale[df_materiale["FLDS_CMNT_id"] == row[1]]
             domande = df_domande[df_domande["QSGR_CMNT_Id"] == row[1]]
-            materiale = df_materiale[df_materiale["FLDS_CMNT_id"] == row[1]]
             course_id = get_course(row.shortname)
             if course_id != -1:
-                update_dataframe(dataframe, "shortname", row.shortname, "idCourseMoodle", int(course_id))
+                update_dataframe(df_courses, "shortname", row.shortname, "idCourseMoodle", int(course_id))
                 populate_course_modules(activities, course_id, df_domande_multichoice, df_domande_multichoice_opzioni,
                                         df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario,
                                         domande, materiale, pages, questionnaires, sections, subsections, path_activities)
@@ -84,19 +105,18 @@ def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario
                     numsections = len(diario)
                 else:
                     numsections = 1
-                create_course(activities, dataframe, df_domande_multichoice, df_domande_multichoice_opzioni,
+
+                create_course(activities, df_domande_multichoice, df_domande_multichoice_opzioni,
                               df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario, domande,
-                              materiale, numsections, pages, questionnaires, row, sections, subsections, path_activities)
+                              materiale, numsections, pages, questionnaires, row, sections, subsections,
+                              path_activities)
     finally:
-        if os.path.exists("../resources/courses/courses_pat_tsm_{}.csv".format(instance)):
-            dataframe.to_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance), index=False, mode='a', header=False)
-        else:
-            dataframe.to_csv("../resources/courses/courses_pat_tsm_{}.csv".format(instance), index=False)
+        df_courses.to_csv("../resources/courses/courses_pat_tsm.csv", index=False)
 
 
-def create_course(activities, dataframe, df_domande_multichoice, df_domande_multichoice_opzioni,
-                  df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario, domande,
-                  materiale, numsections, pages, questionnaires, row, sections, subsections, path_activities):
+def create_course(activities, df_domande_multichoice, df_domande_multichoice_opzioni, df_domande_rating_headers,
+                  df_domande_rating_options, df_dropdown, diario, domande, materiale, numsections, pages,
+                  questionnaires, row, sections, subsections, path_activities):
     functionname = "core_course_create_courses"
     courses = {}
     courses["courses[{}][fullname]".format(0)] = row[2]
@@ -110,8 +130,9 @@ def create_course(activities, dataframe, df_domande_multichoice, df_domande_mult
     res = requests.post(serverurl, data=courses)
     moodle_courses = json.loads(res.content)
     print(moodle_courses)
-    update_dataframe(dataframe, "shortname", row.shortname, "idCourseMoodle", int(moodle_courses[0]["id"]))
+    update_dataframe(df_courses, "shortname", row.shortname, "idCourseMoodle", int(moodle_courses[0]["id"]))
     for course in moodle_courses:
+        #tag_course(course["id"], 7)
         populate_course_modules(activities, course["id"], df_domande_multichoice, df_domande_multichoice_opzioni,
                                 df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario,
                                 domande, materiale, pages, questionnaires, sections, subsections, path_activities)
@@ -120,8 +141,6 @@ def create_course(activities, dataframe, df_domande_multichoice, df_domande_mult
 def populate_course_modules(activities, course_id, df_domande_multichoice, df_domande_multichoice_opzioni,
                             df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario, domande,
                             materiale, pages, questionnaires, sections, subsections, path_activities):
-    # Import once all questionnaires not yet created since we don't know the correct relation between the questionnaire and the course
-    # make sure to exclude the questionnaires that are present in 'Percorso'
     try:
         if len(sections) > 0:
             # Percorso Formativo
@@ -131,13 +150,13 @@ def populate_course_modules(activities, course_id, df_domande_multichoice, df_do
                                    df_dropdown, materiale)
         elif len(diario) > 0:
             # Diario Lezione
-            questionnaires = questionnaires[(questionnaires["IdMoodle"] == 0) & (~questionnaires["QSTN_Id"].isin(path_activities["IdObjectLong"]))]
+            #questionnaires = questionnaires[(questionnaires["IdMoodle"] == 0) & (~questionnaires["QSTN_Id"].isin(path_activities["IdObjectLong"]))]
             populate_course_diario(course_id, diario, materiale, questionnaires, domande, df_domande_multichoice,
                                    df_domande_multichoice_opzioni, pages, \
                                    df_dropdown, df_domande_rating_options, df_domande_rating_headers)
         else:
             # populate courses of type <> Percorso/Diario
-            questionnaires = questionnaires[(questionnaires["IdMoodle"] == 0) & (~questionnaires["QSTN_Id"].isin(activities["IdObjectLong"]))]
+            questionnaires = questionnaires[(~questionnaires["QSTN_Id"].isin(activities["IdObjectLong"]))]
             add_course_modules_no_sections(course_id, 1, questionnaires, domande, df_domande_multichoice,
                                            df_domande_multichoice_opzioni, pages, \
                                            df_dropdown, df_domande_rating_options, df_domande_rating_headers, materiale)
@@ -156,7 +175,6 @@ def get_course(shortname):
     params = {"field" : "shortname", "value": shortname}
     res = requests.post(serverurl, params=params)
     result = json.loads(res.content)
-    print(result)
     return result['courses'][0]["id"] if len(result['courses']) > 0 else -1
   
 def core_course_update_courses(course_id, num_sections):    
@@ -176,9 +194,11 @@ def populate_course_diario(course_id, diario, materiale, questionnaires, domande
     # Add Section name and description
     curr_id = 0
     for row in diario.itertuples():
+        print(row)
         extract = clean_text(row.PREV_ProgrammaSvolto)
         programma_svolto = extract[1].replace('"',"'")
         embedded_material = extract[0]
+        embedded_questionnaires = extract[2]
         embedded.extend(embedded_material)
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id + 1, course_id, row.Section_Name), shell=True).decode("utf-8").strip()
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} summary "{}"'.format(curr_id + 1, course_id,
@@ -188,19 +208,21 @@ def populate_course_diario(course_id, diario, materiale, questionnaires, domande
             material = materiale[materiale["FLDS_id"] == int(single_material)].to_dict('records')
             module_id, module_type = define_material(course_id, material, r, curr_id + 1)
             update_dataframe(df_materiale, "FLDS_id", int(single_material), "IdMoodle", module_id)
+        # add questionnaires embedded inside the current section description
+        section_questionnaires = questionnaires[(questionnaires["QSTN_Id"].isin(embedded_questionnaires))]
+        questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
+                               domande_all, df_domande_multichoice, df_domande_multichoice_opzioni, pages, section_questionnaires, curr_id + 1)
+        # Add section's material
+        current_diario_material = diario_material[diario_material["IdEvent"] == row.EVNT_id]
+        for material in current_diario_material.itertuples():
+            curr_material = materiale[materiale["FLDS_id"] == int(material.IdFile)].to_dict('records')
+            define_material(course_id, curr_material, r, curr_id + 1)
         # Add Attendance activity inside this section
-        attendance_id = mod_attendance_add_attendance(course_id, curr_id + 1, row.Section_Name)
+        #attendance_id = mod_attendance_add_attendance(course_id, curr_id + 1, row.Section_Name)
         # Add attendance's session
-        mod_attendance_add_session(attendance_id, row.start, row.duration)
+        #mod_attendance_add_session(attendance_id, row.start, row.duration)
         curr_id = curr_id + 1
-    # Add all material of the community
-    for material in materiale.itertuples():
-        if str(material.FLDS_id) not in embedded:
-            curr_material = materiale[materiale["FLDS_id"] == int(material.FLDS_id)].to_dict('records')
-            define_material(course_id, curr_material, r, 0, stealth=1)
-    # Add questionnaires
-    questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
-                           domande_all, domande_multichoice, domande_opzioni, pages, questionnaires, curr_id, stealth=1)
+
 
 def course_update_sections(course_id, sections, df_subsections, df_activities, questionnaires, domande, \
                            df_domande_rating_options, df_domande_rating_headers, df_domande_multichoice, df_domande_multichoice_opzioni, pages, \
@@ -212,6 +234,7 @@ def course_update_sections(course_id, sections, df_subsections, df_activities, q
         extract = clean_text(row.Description)
         description = extract[1].replace('"',"'")
         embedded_material = extract[0]
+        embedded_questionnaires = extract[2]
 
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id, course_id, row.Name), shell=True).decode("utf-8").strip()
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} summary "{}"'.format(curr_id, course_id, description), shell=True).decode("utf-8").strip()
@@ -224,13 +247,18 @@ def course_update_sections(course_id, sections, df_subsections, df_activities, q
                 extract = clean_text(subrow.Description)
                 description = extract[1].replace('"',"'")
                 embedded_material = extract[0]
+                embedded_questionnaires = extract[2]
 
                 subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id, course_id, subrow.Name.replace('"','\\"')), shell=True).decode("utf-8").strip()
                 subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} summary "{}"'.format(curr_id, course_id, description), shell=True).decode("utf-8").strip()
                 # add material embedded inside the current section description
                 create_embedded_resources(course_id, curr_id, embedded_material, materiale, r)
+                # add questionnaires embedded inside the current section description
+                section_questionnaires = questionnaires[(questionnaires["QSTN_Id"].isin(embedded_questionnaires))]
+                questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
+                                       domande, df_domande_multichoice, df_domande_multichoice_opzioni, pages, section_questionnaires, curr_id)
                 # Add activities inside section
-                activities = df_activities[(df_activities["IdUnit"] == subrow.Id_section) & (df_activities["IdCommunity"] == subrow.IdCommunity) & (df_activities["IdPath"] == subrow.IdPath) & (df_activities["DisplayOrder"] < int(subrow.DisplayOrder)) & (df_activities["DisplayOrder"] > prev_order) ]
+                activities = df_activities[(df_activities["IdUnit"] == subrow.Id_section) & (df_activities["IdCommunity"] == subrow.IdCommunity) & (df_activities["IdPath"] == subrow.IdPath) & (df_activities["DisplayOrder"] <= int(subrow.DisplayOrder)) & (df_activities["DisplayOrder"] > prev_order) ]
                 add_course_modules(course_id, curr_id - 1, activities, questionnaires, domande, df_domande_multichoice, df_domande_multichoice_opzioni, pages, \
                                    df_dropdown, df_domande_rating_options, df_domande_rating_headers, materiale)
                 prev_order = subrow.DisplayOrder
@@ -246,11 +274,11 @@ def course_update_sections(course_id, sections, df_subsections, df_activities, q
                                df_dropdown, df_domande_rating_options, df_domande_rating_headers, materiale)
             # add material embedded inside the current section description
             create_embedded_resources(course_id, curr_id - 1, embedded_material, materiale, r)
-    # Consider adding only the questionnaires not inside the sections since they are already added
-    #& (questionnaires["IdMoodle"] == 0)
-    questionnaires = questionnaires[(~questionnaires["QSTN_Id"].isin(df_activities["IdObjectLong"])) ] #(questionnaires["QSTN_Tipo"] == 0) &
-    questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
-                           domande, df_domande_multichoice, df_domande_multichoice_opzioni, pages, questionnaires, curr_id-1, stealth=1)
+            # add questionnaires embedded inside the current section description
+            section_questionnaires = questionnaires[(questionnaires["QSTN_Id"].isin(embedded_questionnaires))]
+            questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
+                                        domande, df_domande_multichoice, df_domande_multichoice_opzioni, pages, section_questionnaires, curr_id-1)
+
 
 def create_embedded_resources(course_id, curr_id, embedded_material, materiale, r):
     for single_material in embedded_material:
@@ -299,6 +327,7 @@ def add_module_scorm(course_id, section_id, name, path, duration_hours=0, durati
         output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o "--packagefilepath={} \
         --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
         --intro={} --hidebrowse=1 --visibleoncoursepage={} " scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
+    print(output)
     return output
     
 def add_module_resource(course_id, section_id, name, path, duration_hours=0, duration_min=0, intro="", stealth=0):
@@ -311,6 +340,7 @@ def add_module_resource(course_id, section_id, name, path, duration_hours=0, dur
     print(res.content)
     res = json.loads(res.content)
     if 'exception' in res:
+        log_generator("error add_module_resource course: {}".format(course_id))
         log_generator(res)
         return 0
     return res["moduleid"]
@@ -329,9 +359,9 @@ def add_module_questionnaire(course_id, section_id, questionnaires, domande, df_
             questions = {}
             for i, question in enumerate(my_questions.itertuples()):
                 questions["questions[{}][tipo]".format(i)] = question.DMND_Tipo
-                soup = BeautifulSoup(str(question.DMML_Testo), 'html.parser')
-                questions["questions[{}][name]".format(i)] =  str(soup.get_text()) + '...'
-                questions["questions[{}][description]".format(i)] = question.DMML_Testo
+                soup = BeautifulSoup(str(question.DMML_Testo)[:20], 'html.parser')
+                questions["questions[{}][name]".format(i)] = soup.get_text(strip=True) + "_" + str(question.DMML_Id)
+                questions["questions[{}][description]".format(i)] = str(question.DMML_Testo)
                 questions["questions[{}][required]".format(i)] = question.LKQD_isObbligatorio
                 questions["questions[{}][position]".format(i)] = question.LKQD_NumeroDomanda
                 if question.DMND_Tipo == 4: # dropdown
@@ -341,6 +371,7 @@ def add_module_questionnaire(course_id, section_id, questionnaires, domande, df_
                     opts = []
                     for opt in domande_opzioni[domande_opzioni["DMMT_DMML_Id"] == question.DMML_Id].sort_values(by="DMMO_NumeroOpzione")["answer_questionnaire"]:
                         opts.append(opt)
+                        #opts.append(BeautifulSoup(str(opt), 'html.parser').get_text(strip=True))
                     questions["questions[{}][max_responses]".format(i)] = int(domande_multichoice[domande_multichoice["DMMT_DMML_Id"] == question.DMML_Id].to_dict("records")[0]["DMMT_NumeroMaxRisposte"])
                     questions["questions[{}][options]".format(i)] = "@@".join(opts)
                 elif question.DMND_Tipo == 1: # rating
@@ -356,49 +387,37 @@ def add_module_questionnaire(course_id, section_id, questionnaires, domande, df_
                     questions["questions[{}][headers]".format(i)] = '["' + '","'.join(opts) + '"]'
             if len(my_questions) == 0:
                 return -1
-            print("inside questionnaire" + str(questionnaire.QSTN_Id))
+            log_generator("inside questionnaire {}".format(str(questionnaire.QSTN_Id)))
+            print(questions)
             res = requests.post(serverurl, params=params, data=questions)
-            print(res.content)
+            log_generator(res.content)
             res = json.loads(res.content)
             if 'exception' in res:
                 log_generator(res, questionnaire.QSTN_Id)
                 res = {"moduleid":0}
     except Exception as err:
-        print(err)
-        log_generator(err, questionnaire.QSTN_Id)
+        print("Error in add_module_questionnaire {}".format(err))
+        log_generator("Error in add_module_questionnaire {}".format(err), questionnaire.QSTN_Id)
         res = {"moduleid":0}
     finally:
         return res["moduleid"]
 
-def add_module_quiz(course_id, section_id, questionnair, domande_all, domande_multichoice, domande_opzioni, pages, df_dropdown, restricted_by_activity_id=None, duration_hours=0, duration_min=0, stealth=0):
+def add_module_quiz(course_id, section_id, questionnair, domande_all, domande_multichoice, domande_opzioni, pages, df_dropdown, duration_hours=0, duration_min=0, stealth=0):
     res = {"moduleid":0}
+    print("Starting quiz creation")
     try:
         functionname = "local_modcustomfields_create_quiz"
         serverurl = moodle_url  + '&wsfunction=' + functionname
         params ={"courseid" : course_id, "sectionid": section_id, \
                  "quizname": questionnair[0]["QSML_Nome"], "quizintro": questionnair[0]["QSML_Descrizione"], "attempts": questionnair[0]["MaxAttempts"], \
                  "qperpage": questionnair[0]["QSTN_nQuestionsPerPage"], "timeopen": questionnair[0]["opendate"], "timeclose": questionnair[0]["closedate"], \
-                 "israndom": questionnair[0]["israndom"], "maxquestions": questionnair[0]["maxquestions"], "restricted_by_activity_id":2, 'duration_hours': duration_hours, \
+                 "israndom": questionnair[0]["israndom"], 'duration_hours': duration_hours, \
                  'duration_min':duration_min, 'pages': pages, 'stealth' : stealth}
-        questions = {}
-        for row in domande_all.itertuples():
-            soup = BeautifulSoup(str(row.DMML_Testo), 'html.parser')
-            questions["questions[{}][name]".format(row[0])] =  soup.get_text() + "..."
-            questions["questions[{}][text]".format(row[0])] = row.DMML_Testo
-            questions["questions[{}][tipo]".format(row[0])] = row.DMND_Tipo
-            if row.DMND_Tipo == 4: # dropdown
-                questions["questions[{}][answers]".format(row[0])] = df_dropdown[df_dropdown["DMML_Id"] == row.DMML_Id]
-            elif row.DMND_Tipo == 3: # multichoice
-                questions["questions[{}][single]".format(row[0])] = domande_multichoice[domande_multichoice["DMMT_DMML_Id"] == row.DMML_Id].to_dict("records")[0]["single"]
-                opts = []
-                for opt in domande_opzioni[domande_opzioni["DMMT_DMML_Id"] == row.DMML_Id].sort_values(by="DMMO_NumeroOpzione")["answer"]:
-                    opts.append(opt)
-                questions["questions[{}][answers]".format(row[0])] = "@@".join(opts)
+        questions = generate_questions(df_dropdown, domande_all, domande_multichoice, domande_opzioni)
         if len(domande_all) == 0:
             return -1
-        print("inside quiz" + str(questionnair[0]["QSTN_Id"]))
+        print("inside quiz {} {}".format(str(questionnair[0]["QSTN_Id"]), str(questionnair[0]["QSML_Nome"])))
         res = requests.post(serverurl, params=params, data=questions)
-        print(res.content)
         res = json.loads(res.content)
         if 'exception' in res:
             log_generator(res, questionnair[0]["QSTN_Id"])
@@ -410,28 +429,108 @@ def add_module_quiz(course_id, section_id, questionnair, domande_all, domande_mu
     finally:
         return res["moduleid"]
 
+def generate_questions(df_dropdown, domande_all, domande_multichoice, domande_opzioni):
+    questions = {}
+    for index, row in enumerate(domande_all.itertuples()):
+        soup = BeautifulSoup(str(row.DMML_Testo)[:20], 'html.parser')
+        questions["questions[{}][name]".format(index)] = soup.get_text(strip=True) + "_" + str(row.DMML_Id)
+        questions["questions[{}][text]".format(index)] = row.DMML_Testo
+        questions["questions[{}][tipo]".format(index)] = row.DMND_Tipo
+        if row.DMND_Tipo == 4:  # dropdown
+            questions["questions[{}][answers]".format(index)] = df_dropdown[df_dropdown["DMML_Id"] == row.DMML_Id]
+        elif row.DMND_Tipo == 3:  # multichoice
+            questions["questions[{}][single]".format(index)] = domande_multichoice[domande_multichoice["DMMT_DMML_Id"] == row.DMML_Id].to_dict("records")[0]["single"]
+            opts = []
+            for opt in domande_opzioni[domande_opzioni["DMMT_DMML_Id"] == row.DMML_Id].sort_values(by="DMMO_NumeroOpzione")["answer"]:
+                opts.append(opt)
+            questions["questions[{}][answers]".format(index)] = "@@".join(opts)
+    return questions
+
+def add_module_quiz_random(course_id, section_id, questionnair, duration_hours=0, duration_min=0, stealth=0):
+    res = {"moduleid":0}
+    try:
+        functionname = "local_modcustomfields_create_quiz_random"
+        serverurl = moodle_url + '&wsfunction=' + functionname
+        common_quiz_data = questionnair.iloc[0]
+        params ={"courseid" : course_id, "sectionid": section_id, \
+                 "quizname": common_quiz_data["QSML_Nome"], "quizintro": common_quiz_data["QSML_Descrizione"], "attempts": common_quiz_data["MaxAttempts"], \
+                 "qperpage": common_quiz_data["QSTN_nQuestionsPerPage"], "timeopen": common_quiz_data["opendate"], "timeclose": common_quiz_data["closedate"], \
+                 "israndom": common_quiz_data["israndom"],  'duration_hours': duration_hours, \
+                 'duration_min':duration_min, 'stealth' : stealth}
+        questioncategids = {}
+        for index, row in enumerate(questionnair.itertuples()):
+            if int(row.LKQL_LIBRERIA_Id) != 0:
+                question_category_id = get_moodle_id_libreria(int(row.LKQL_LIBRERIA_Id))
+                questioncategids["questioncategids[{}][id]".format(index)] = question_category_id
+                questioncategids["questioncategids[{}][maxquestions]".format(index)] = row.maxquestions
+        print("inside quiz random {} {}".format(str(common_quiz_data["QSTN_Id"]), str(common_quiz_data["QSML_Nome"])), questioncategids)
+        print(questioncategids)
+        if len(questioncategids) > 0:
+            res = requests.post(serverurl, params=params, data=questioncategids)
+            res = json.loads(res.content)
+            if 'exception' in res:
+                log_generator(res, common_quiz_data["QSTN_Id"])
+                res = {"moduleid":0}
+        else:
+            res = {"moduleid":0}
+    except Exception as err:
+        print(err)
+        log_generator(err, common_quiz_data["QSTN_Id"])
+        res = {"moduleid":0}
+    finally:
+        return res["moduleid"]
+
+def create_question_bank(communita_id, category_id):
+    functionname = "local_modcustomfields_create_question_bank"
+    librerie = df_librerie[df_librerie["QSGR_CMNT_Id"] == communita_id]
+    try:
+        for qbank in librerie.itertuples():
+            domande = df_domande[df_domande["QSTN_Id"] == qbank.QSTN_Id]
+            questions = generate_questions(df_dropdown, domande, df_domande_multichoice, df_domande_multichoice_opzioni)
+            if len(questions) > 0:
+                serverurl = moodle_url + '&wsfunction=' + functionname
+                params = {"qbankname" : qbank.QSML_Nome, "categoryid": category_id}
+                res = requests.post(serverurl, params=params, data=questions)
+                result = json.loads(res.content)
+                update_dataframe(df_librerie, "QSTN_Id", qbank.QSTN_Id, "IdMoodle", result["questioncategoryid"])
+    finally:
+        df_librerie.to_csv("../resources/questionnaire/df_librerie.csv", index=False)
+
+def get_moodle_id_libreria(lib_id):
+    quest_moodle_id = df_librerie[df_librerie["QSTN_Id"] == lib_id].to_dict('records')[0]["IdMoodle"]
+    return quest_moodle_id
+
 def add_course_modules(course_id, section_id, activities, questionnaires, domande_all, domande_multichoice, domande_opzioni, pages, df_dropdown, \
                        df_domande_rating_options, df_domande_rating_headers, materiale):
     module_id = 0
     module_type = ""
     for row in activities.itertuples():
         if row.CodeModule == "SRVMATER":
-            material = materiale[materiale["FLDS_id"] == row.IdObjectLong].to_dict('records')
+            material = materiale[materiale["FLDS_id"] == int(row.IdObjectLong)].to_dict('records')
             module_id, module_type = define_material(course_id, material, row, section_id)
             update_dataframe(df_materiale, "FLDS_id", row.IdObjectLong, "IdMoodle", module_id)
         elif row.CodeModule == "SRVQUST":
             questionnair = questionnaires[questionnaires["QSTN_Id"] == row.IdObjectLong].to_dict('records')
             doman_all = domande_all[domande_all["QSTN_Id"] == row.IdObjectLong].sort_values(by="LKQD_NumeroDomanda")
             pag = "@@".join(pages[(pages["QSML_QSTN_Id"] == row.IdObjectLong) & (pages["QSPG_NomePagina"].notna())]["QSPG_NomePagina"].to_dict().values())
-            if len(questionnair) > 0 and len(doman_all) > 0:
-                if questionnair[0]["QSTN_Tipo"] == 7 or questionnair[0]["QSTN_Tipo"] == 1:
+            if len(questionnair) > 0:
+                if questionnair[0]["QSTN_Tipo"] == 5 and len(doman_all) > 0:
+                    # static questions quiz
                     module_type = "quiz"
                     module_id = add_module_quiz(course_id, section_id, questionnair, doman_all, domande_multichoice, domande_opzioni, pag, df_dropdown, duration_hours=row.customfield_duration_hours, duration_min=row.customfield_duration_mins)
-                elif questionnair[0]["QSTN_Tipo"] == 0:
+                    update_dataframe(df_questionnaires, "QSTN_Id", row.IdObjectLong, "IdMoodle", module_id)
+                elif questionnair[0]["QSTN_Tipo"] == 7:
+                    # random questions quiz
+                    module_type = "quiz"
+                    questionnair = questionnaires[questionnaires["QSTN_Id"] == row.IdObjectLong]
+                    module_id = add_module_quiz_random(course_id, section_id, questionnair, duration_hours=row.customfield_duration_hours, duration_min=row.customfield_duration_mins)
+                    update_dataframe(df_questionnaires, "QSTN_Id", row.IdObjectLong, "IdMoodle", module_id)
+                elif questionnair[0]["QSTN_Tipo"] == 0 and len(doman_all) > 0:
+                    # questionnaire - survey
                     module_type = "questionnaire"
                     questionnair = questionnaires[questionnaires["QSTN_Id"] == row.IdObjectLong]
                     module_id = add_module_questionnaire(course_id, section_id, questionnair, doman_all, df_domande_rating_options, df_domande_rating_headers, df_dropdown, domande_multichoice, domande_opzioni)
-                update_dataframe(df_questionnaires, "QSTN_Id", row.IdObjectLong, "IdMoodle", module_id)
+                    update_dataframe(df_questionnaires, "QSTN_Id", row.IdObjectLong, "IdMoodle", module_id)
         # update df
         update_dataframe(df_activities, "Id", row.Id, "IdMoodle", module_id)
         update_dataframe(df_activities, "Id", row.Id, "moduleMoodle", module_type)
@@ -441,13 +540,15 @@ def add_course_modules_no_sections(course_id, section_id, questionnaires, domand
                                    df_domande_rating_options, df_domande_rating_headers, materiale):
     row_mat = namedtuple('row_mat', ['customfield_duration_hours', 'customfield_duration_mins', 'Description'])
     row = row_mat(0, 0, '')
+    print(materiale)
     if len(materiale) > 0 :
         for material in materiale.itertuples():
             my_material = materiale[materiale["FLDS_id"] == material.FLDS_id].to_dict('records')
             module_id, module_type = define_material(course_id, my_material, row, section_id)
             update_dataframe(df_materiale, "FLDS_id", material.FLDS_id, "IdMoodle", module_id)
+    # comment to prepare for the new version: create a separate course as a questionnaires' container
     questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown,
-                           domande_all, domande_multichoice, domande_opzioni, pages, questionnaires, section_id, stealth=1)
+                           domande_all, domande_multichoice, domande_opzioni, pages, questionnaires, section_id)
 
 
 def questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rating_options, df_dropdown, domande_all,
@@ -456,25 +557,39 @@ def questionnaires_builder(course_id, df_domande_rating_headers, df_domande_rati
     row = row_mat(0, 0, '')
     module_id = 0
     if len(questionnaires) > 0:
-        for questionnair in questionnaires.itertuples():
-            doman_all = domande_all[domande_all["QSTN_Id"] == questionnair.QSTN_Id].sort_values(by="LKQD_NumeroDomanda")
-            pag = "@@".join(pages[(pages["QSML_QSTN_Id"] == questionnair.QSTN_Id) & (pages["QSPG_NomePagina"].notna())][
+        quest_groups = questionnaires.groupby(["QSTN_Id", "QSTN_Tipo", "QSML_Nome"])
+        for key, group in quest_groups:
+            QSTN_Id = key[0]
+            QSTN_Tipo = key[1]
+            QSML_Nome = key[2]
+            doman_all = domande_all[domande_all["QSTN_Id"] == QSTN_Id].sort_values(by="LKQD_NumeroDomanda")
+            pag = "@@".join(pages[(pages["QSML_QSTN_Id"] == QSTN_Id) & (pages["QSPG_NomePagina"].notna())][
                                 "QSPG_NomePagina"].to_dict().values())
-            if len(questionnair) > 0 and len(doman_all) > 0 :
-                if questionnair.QSTN_Tipo == 7 or questionnair.QSTN_Tipo == 1:
-                    questionnaire = questionnaires[questionnaires["QSTN_Id"] == questionnair.QSTN_Id].to_dict('records')
-                    module_id = add_module_quiz(course_id, section_id, questionnaire, doman_all, domande_multichoice,
-                                    domande_opzioni, pag, df_dropdown, duration_hours=row.customfield_duration_hours,
-                                    duration_min=row.customfield_duration_mins, stealth=stealth)
-                elif questionnair.QSTN_Tipo == 0:
-                    questionnaire = questionnaires[questionnaires["QSTN_Id"] == questionnair.QSTN_Id]
-                    module_id = add_module_questionnaire(course_id, section_id, questionnaire, doman_all, df_domande_rating_options,
-                                             df_domande_rating_headers, df_dropdown, domande_multichoice,
-                                             domande_opzioni, stealth=stealth)
-                update_dataframe(df_questionnaires, "QSTN_Id", questionnair.QSTN_Id, "IdMoodle", module_id)
+            log_generator("questionnaires_builder: tot questions:{} id:{} tipo:{} nome:{}".format(len(doman_all), QSTN_Id, QSTN_Tipo, QSML_Nome))
+            if QSTN_Tipo == 5 and len(doman_all) > 0:
+                # static questions quiz
+                questionnaire = questionnaires[questionnaires["QSTN_Id"] == QSTN_Id].to_dict('records')
+                module_id = add_module_quiz(course_id, section_id, questionnaire, doman_all, domande_multichoice,
+                                domande_opzioni, pag, df_dropdown, duration_hours=row.customfield_duration_hours,
+                                duration_min=row.customfield_duration_mins, stealth=stealth)
+                update_dataframe(df_questionnaires, "QSTN_Id", QSTN_Id, "IdMoodle", module_id)
+            elif QSTN_Tipo == 7:
+                # random questions quiz
+                questionnaire = questionnaires[questionnaires["QSTN_Id"] == QSTN_Id]
+                module_id = add_module_quiz_random(course_id, section_id, questionnaire, duration_hours=row.customfield_duration_hours,
+                                            duration_min=row.customfield_duration_mins, stealth=stealth)
+                update_dataframe(df_questionnaires, "QSTN_Id", QSTN_Id, "IdMoodle", module_id)
+            elif QSTN_Tipo == 0 and len(doman_all) > 0:
+                # questionnaire - survey
+                questionnaire = questionnaires[questionnaires["QSTN_Id"] == QSTN_Id]
+                module_id = add_module_questionnaire(course_id, section_id, questionnaire, doman_all, df_domande_rating_options,
+                                         df_domande_rating_headers, df_dropdown, domande_multichoice,
+                                         domande_opzioni, stealth=stealth)
+                update_dataframe(df_questionnaires, "QSTN_Id", QSTN_Id, "IdMoodle", module_id)
 
 
 def define_material(course_id, material, row, section_id, stealth=0, service=""):
+    import re
     module_id = 0
     module_type = ""
     if len(material) > 0:
@@ -488,13 +603,12 @@ def define_material(course_id, material, row, section_id, stealth=0, service="")
         module_type = "scorm" if is_scorm == 1 else "resource"
         if int(material[0]["IdMoodle"]) != 0 and service == "wiki":
             return int(material[0]["IdMoodle"]), module_type
-
         if is_scorm == 1:
             module_id = add_module_scorm(course_id, section_id, material[0]["FLDS_nome"],
                              path,
                              duration_hours=row.customfield_duration_hours,
                              duration_min=row.customfield_duration_mins,
-                             intro=row.Description,
+                             intro=str(row.Description).replace('"', "'"),
                              stealth=stealth)
         else:
             module_id = add_module_resource(course_id, section_id, material[0]["FLDS_nome"],
@@ -560,8 +674,11 @@ def core_user_create_users(dataframe):
         users["users[{}][password]".format(row[0])] = "Password1."
         users["users[{}][customfields][0][type]".format(row[0])] = "codice_fiscale"
         users["users[{}][customfields][0][value]".format(row[0])] = str(row.codice_fiscale)
+    if len(users) == 0:
+        return
     res = requests.post(serverurl, data=users)
     created_users = json.loads(res.content)
+    print(created_users)
     df_created_users = pd.DataFrame(created_users)
     df_created_users = df_created_users.rename(columns={"username":"usernameMoodle"})
     dataframe["username"] = dataframe["username"].astype('str')
@@ -591,7 +708,7 @@ def core_user_get_users_by_field(username):
     res = requests.post(serverurl, params=params, data=values)
     return json.loads(res.content)
 
-def enrol_manual_enrol_users(dataframe):
+def enrol_manual_enrol_users(dataframe, active=True):
     functionname = "enrol_manual_enrol_users"
     serverurl = moodle_url  + '&wsfunction=' + functionname 
     enrolments = {}
@@ -601,6 +718,8 @@ def enrol_manual_enrol_users(dataframe):
             enrolments["enrolments[{}][courseid]".format(row[0])] = int(row.idCourseMoodle)
             enrolments["enrolments[{}][roleid]".format(row[0])] = int(row.roleId)
             enrolments["enrolments[{}][userid]".format(row[0])] = int(row.moodleUserId)
+            if not active:
+                enrolments["enrolments[{}][timeend]".format(row[0])] = 1588485600
     res = requests.post(serverurl, data=enrolments)
     print(res.content)
     return res.content
@@ -608,39 +727,104 @@ def enrol_manual_enrol_users(dataframe):
 def add_group_members(dataframe):
     functionname = "core_group_add_group_members"
     serverurl = moodle_url  + '&wsfunction=' + functionname
-    dataframe = dataframe[dataframe["TPRL_nome"].str.contains("edizione")]
+    dataframe = dataframe[(dataframe["TPRL_nome"].str.contains("edizione")) | (dataframe["TPRL_nome"].str.contains("Formazione permanente"))]
+    print(dataframe)
     if len(dataframe) == 0 :
         return
     members = {}
     for iter, row in enumerate(dataframe.itertuples()):
         print(row)
-        number = re.findall('[0-9]+', row.TPRL_nome)
-        group_id = "{}{}".format(int(row.idCourseMoodle), number[0])
+        if row.TPRL_nome == 'Formazione permanente':
+            group_id = "{}{}".format(int(row.idCourseMoodle), 123456)
+        else:
+            number = re.findall('[0-9]+', row.TPRL_nome)
+            group_id = "{}{}".format(int(row.idCourseMoodle), number[0])
         members["members[{}][groupid]".format(iter)] = int(group_id)
         members["members[{}][userid]".format(iter)] = int(row.moodleUserId)
     res = requests.post(serverurl, data=members)
+    print(members)
+    print(json.loads(res.content))
     return json.loads(res.content)
 
-def create_groups(df_courses):
-    df_courses = df_courses[df_courses["idCourseMoodle"].notna()]
+
+def create_groups(df_course_group):
     functionname = "core_group_create_groups"
     serverurl = moodle_url  + '&wsfunction=' + functionname
-    groups = {}
+    print(df_course_group)
     iter = 0
-    for course in df_courses.itertuples():
-        print(int(course.idCourseMoodle))
-        for number in range(1,26):
-            group_name = "Partecipante {} edizione".format(number)
-            group_id = "{}{}".format(int(course.idCourseMoodle), number)
+    course_id = 0
+    if len(df_course_group) == 0:
+        return
+    all_course_grps = df_course_group.groupby("idCourseMoodle")
+    for key, group in all_course_grps:
+        groups = {}
+        print(group)
+        for row in all_course_grps.get_group(key).itertuples():
+            print(int(row.idCourseMoodle))
+            course_id = int(row.idCourseMoodle)
+            group_name = row.TPRL_nome
+            # skip for the moment and create it separately
+            if group_name == "Formazione permanente":
+                continue
+            number = re.findall('[0-9]+', row.TPRL_nome)
+            group_id = "{}{}".format(int(row.idCourseMoodle), number[0])
             groups["groups[{}][idnumber]".format(iter)] = int(group_id)
             groups["groups[{}][name]".format(iter)] = group_name
             groups["groups[{}][description]".format(iter)] = group_name
-            groups["groups[{}][courseid]".format(iter)] = int(course.idCourseMoodle)
+            groups["groups[{}][courseid]".format(iter)] = int(row.idCourseMoodle)
             iter = iter + 1
-    res = requests.post(serverurl, data=groups)
-    ret = json.loads(res.content)
-    print(ret)
+        print(groups)
+        res = requests.post(serverurl, data=groups)
+        ret = json.loads(res.content)
+        print(ret)
     return ret
+
+
+def create_groups_formazione_permanente(df_course_group):
+    functionname = "core_group_create_groups"
+    serverurl = moodle_url + '&wsfunction=' + functionname
+    print(df_course_group)
+    groups = {}
+    all_course_grps = df_course_group.groupby("idCourseMoodle")
+    for key, group in all_course_grps:
+        # Create Formazione permanente group
+        group_id = "{}{}".format(key, 123456)
+        groups["groups[{}][idnumber]".format(0)] = int(group_id)
+        groups["groups[{}][name]".format(0)] = "Formazione permanente"
+        groups["groups[{}][description]".format(0)] = "Formazione permanente"
+        groups["groups[{}][courseid]".format(0)] = key
+        print(groups)
+        res = requests.post(serverurl, data=groups)
+        ret = json.loads(res.content)
+        print(ret)
+
+
+def generate_inactive_enrolments():
+    df_percorso_enrolments = pd.read_csv("../resources/users/enrolments_percorso_{}.csv".format(instance))
+    df_comunity_enrolments = pd.read_csv("../resources/users/enrolments_{}.csv".format(instance))
+    df_comunity_enrolments = df_comunity_enrolments[(df_comunity_enrolments["TPRL_nome"] == "Formazione permanente")]
+    df_comunity_enrolments_grouped = df_comunity_enrolments.groupby("idCourseMoodle")
+    for key, group in df_comunity_enrolments_grouped:
+        current_df_percorso_enrolments = df_percorso_enrolments[(df_percorso_enrolments["idCourseMoodle"] == key) & (df_percorso_enrolments["TPRL_nome"] == "Formazione permanente")]
+        # get only the inactive 'Formazione permanente' enrolments
+        if len(current_df_percorso_enrolments) == 0:
+            inactive_enrolments = df_comunity_enrolments[df_comunity_enrolments["idCourseMoodle"] == key]
+            initial = 0
+            for iter in range(20, len(inactive_enrolments), 20):
+                block = inactive_enrolments[initial: iter]
+                enrol_manual_enrol_users(block, active=False)
+                add_group_members(block)
+                initial = iter
+
+
+"""def enrol_formazione_perm_not_active_into_percorso():
+    inactive_enrolments = pd.read_csv("../resources/users/enrolments_inactive_{}.csv".format(instance), chunksize=10)
+    for block in inactive_enrolments:
+        block = block[block["idCourseMoodle"].notna()]
+        if len(block) > 0:
+            enrol_manual_enrol_users(block, active=False)
+            add_group_members(block)"""
+
 
 def core_cohort_create_cohorts(df_cohorts, courses):
     df_cohorts = df_cohorts.merge(courses[["IdCommunity", "idCourseMoodle"]], left_on="RLPC_CMNT_id", right_on="IdCommunity")

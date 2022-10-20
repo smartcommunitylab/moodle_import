@@ -48,6 +48,7 @@ def activities_dependencies(df_activities, df_dependencies):
 
 def activities_completion(df_activities, df_users, df_status):
     df_activities = df_activities[(df_activities["IdMoodle"].notna()) & (df_activities["IdMoodle"] != 0)]
+    print(df_activities)
     for activity in df_activities.itertuples():
         moodle_activity_id = activity.IdMoodle
         module_name = activity.moduleMoodle
@@ -58,14 +59,14 @@ def activities_completion(df_activities, df_users, df_status):
             if cmid == 0:
                 continue
             # Filter completion status of the activity for all users
-            status_of_activity = df_status[(df_status["IdSubActivity"] == l3_activity_id) & (df_status["Completion"] == 100)]
+            status_of_activity = df_status[(df_status["IdSubActivity"] == l3_activity_id)]
             status_of_activity = status_of_activity.merge(df_users, left_on="IdPerson", right_on="PRSN_id")
             print(status_of_activity)
             for usage in status_of_activity.itertuples():
                 user_moodle = usage.moodleUserId
-                activities_completion_request(user_moodle, cmid, usage.time)
+                activities_completion_request(user_moodle, cmid)
 
-def activities_completion_request(userid, cmid, time):
+def activities_completion_request(userid, cmid, time=None):
     functionname = "core_completion_override_activity_completion_status"
     serverurl = moodle_url  + '&wsfunction=' + functionname
     params ={"userid":int(userid), "cmid" : int(cmid), "newstate": 1}
@@ -90,7 +91,7 @@ def get_course_module_by_instance(module, instance):
 ################################################################################### SCORM Services
 
 def import_scorm_tracks(df_file, df_activities, df_scorm_tracks, df_users):
-    activities = df_activities[(df_activities["moduleMoodle"] == "scorm") & (df_activities["IdCommunity"] == 1775)]
+    activities = df_activities[(df_activities["moduleMoodle"] == "scorm")]
     #print(activities)
     for activity in activities.itertuples():
         id_instance = activity.IdMoodle
@@ -280,17 +281,18 @@ def extract_resource(href, df_materiale, idCourseMoodle, row, resources):
 
 def questionnaire_import_responses_quiz(df_questionnaire, df_users, df_risposte_domande_random_quiz, df_risposte_multichoice):
     df_quiz_activities = df_questionnaire[df_questionnaire["IdMoodle"] != 0]
-    print(df_quiz_activities)
+    #df_users = df_users[df_users["PRSN_id"] == 53611]
     for quiz in df_quiz_activities.itertuples():
         domande = df_risposte_domande_random_quiz[df_risposte_domande_random_quiz["RSQS_QSTN_Id"] == quiz.QSTN_Id]
+        log_generator("Importing responses of quiz: {}, id module in Moodle: {}, nr domande: {}".format(quiz.QSTN_Id, quiz.IdMoodle, len(domande)))
         if len(domande) > 0:
-            print(domande)
             users = df_users[df_users["PRSN_id"].isin(domande["RSQS_PRSN_Id"])].drop_duplicates(subset=["PRSN_id"])
             for user in users.itertuples():
                 domande_of_user = domande[domande["RSQS_PRSN_Id"] == user.PRSN_id]
                 print(domande_of_user)
                 if len(domande_of_user) > 0:
                     # Start new attempt by forcing questions
+                    print(int(user.moodleUserId))
                     attempt = mod_quiz_start_attempt(quiz.IdMoodle, int(user.moodleUserId), domande_of_user, domande_of_user.to_dict('records')[0]["time_start"])
                     # Populate the responses of the questions
                     answers = df_risposte_multichoice.merge(domande_of_user, left_on=["RSOM_RSQS_Id", "DMMT_DMML_Id"], right_on=["RSQS_Id", "DMML_Id"])
@@ -339,8 +341,10 @@ def mod_quiz_start_attempt(quizid, user_id, questions_list, time_start):
     params  = {"quizid" : int(quizid), "userid" : user_id, "time_start" : time_start}
     forcequestions = {}
     for i, question in enumerate(questions_list.itertuples()):
+        soup = BeautifulSoup(str(question.DMML_Testo)[:20], 'html.parser')
         forcequestions["forcequestions[{}][slot]".format(i)] = int(question.LKQD_NumeroDomanda)
-        forcequestions["forcequestions[{}][value]".format(i)] = question.DMML_Testo
+        forcequestions["forcequestions[{}][value]".format(i)] = soup.get_text(strip=True) + "_" + str(question.DMML_Id)
+    print(forcequestions)
     res = requests.post(serverurl, params=params, data=forcequestions)
     print(res.content)
     res = json.loads(res.content)
@@ -374,45 +378,92 @@ def mod_quiz_get_attempt_data(attempt_id):
 
 ############################################################################ Questionnaire Responses Services
 
-def questionnaire_import_responses_questionnaire(df_questionnaire, df_users, df_risposte_domande_questionnaire, df_risposte_multichoice, df_domande, df_risposte_rating, df_risposte_short_answer):
+def questionnaire_import_responses_questionnaire(df_questionnaire, df_users, df_risposte_domande_questionnaire, df_risposte_multichoice, df_domande, df_risposte_rating, df_risposte_short_answer, df_risposte_numeric):
     df_quiz_activities = df_questionnaire[df_questionnaire["IdMoodle"] != 0]
     print(df_quiz_activities)
     for questionnaire in df_quiz_activities.itertuples():
-        domande = df_risposte_domande_questionnaire[df_risposte_domande_questionnaire["RSQS_QSTN_Id"] == questionnaire.QSTN_Id]
-        if len(domande) > 0:
-            print(domande)
-            users = df_users[df_users["PRSN_id"].isin(domande["RSQS_PRSN_Id"])].drop_duplicates(subset=["PRSN_id"])
-            for user in users.itertuples():
-                domande_of_user = domande[domande["RSQS_PRSN_Id"] == user.PRSN_id]
-                # get responses of rating questions
-                domande_of_user_rating = domande_of_user.merge(df_risposte_rating, left_on=["RSQS_Id", "DMML_Id"], right_on=["RSRT_RSQS_Id", "DMRT_DMML_Id"])
-                temp = pd.DataFrame(domande_of_user_rating.groupby("DMRT_DMML_Id")["option"].apply(';;;'.join))
-                temp = temp.reset_index()
-                answers_rating = temp.merge(df_domande, left_on="DMRT_DMML_Id", right_on="DMML_Id")
-                # get responses of short answer questions
-                answers_of_user_short_answer = domande_of_user.merge(df_risposte_short_answer, left_on=["RSQS_Id", "DMML_Id"], right_on=["RSTL_RSQS_Id", "DMML_Id"])
-                print(answers_of_user_short_answer)
-                # get responses of multichoice
-                #domande_of_user_multichoice = domande_of_user.merge(df_domande_rating, left_on="DMML_Id", right_on="DMRT_DMML_Id")
-                print(answers_rating)
-                if len(answers_rating) > 0:
-                    print(answers_rating["option"].to_dict())
-                    # Submit questionnaire responses
-                    mod_questionnaire_submit_questionnaire_response(questionnaire.IdMoodle, int(user.moodleUserId), domande_of_user.to_dict('records')[0]["time_start"], answers_rating, answers_of_user_short_answer)
+        id_moodle = questionnaire.IdMoodle
+        if id_moodle != 0:
+            import_single_quest_responses(df_domande, df_risposte_domande_questionnaire, df_risposte_multichoice,
+                                          df_risposte_rating, df_risposte_short_answer, df_risposte_numeric, df_users, questionnaire, id_moodle)
 
-def mod_questionnaire_submit_questionnaire_response(questionnaireid, userid, time, answers_rating, answers_of_user_short_answer):
+
+def import_single_quest_responses(df_domande, df_risposte_domande_questionnaire, df_risposte_multichoice,
+                                  df_risposte_rating, df_risposte_short_answer, df_risposte_numeric, df_users, questionnaire, id_moodle):
+    domande = df_risposte_domande_questionnaire[
+        df_risposte_domande_questionnaire["RSQS_QSTN_Id"] == questionnaire.QSTN_Id]
+    log_generator("Importing questionaire responses for quest: {} id module in Moodle: {}, nr domande: {}".format(
+        questionnaire.QSTN_Id, id_moodle, len(domande)))
+    if len(domande) > 0:
+        for name, domande_of_user in domande.groupby("RSQS_Id"):
+            user = df_users[df_users["PRSN_id"].isin(domande_of_user["RSQS_PRSN_Id"])]
+            if len(user) == 0:
+                continue
+            # print(domande_of_user)
+            # get responses of rating questions
+            domande_of_user_rating = domande_of_user.merge(df_risposte_rating, left_on=["RSQS_Id", "DMML_Id"],
+                                                           right_on=["RSRT_RSQS_Id", "DMRT_DMML_Id"])
+            temp = pd.DataFrame(domande_of_user_rating.groupby("DMRT_DMML_Id")["option"].apply(';;;'.join))
+            temp = temp.reset_index()
+            answers_rating = temp.merge(df_domande, left_on="DMRT_DMML_Id", right_on="DMML_Id")
+            # get responses of short answer questions
+            answers_of_user_short_answer = domande_of_user.merge(df_risposte_short_answer,
+                                                                 left_on=["RSQS_Id", "DMML_Id"],
+                                                                 right_on=["RSTL_RSQS_Id", "DMML_Id"])
+            # print(answers_of_user_short_answer)
+            # get responses of multichoice
+            domande_of_user_multichoice = domande_of_user.merge(df_risposte_multichoice, left_on=["RSQS_Id", "DMML_Id"],
+                                                                right_on=["RSOM_RSQS_Id", "DMMT_DMML_Id"])
+            temp = pd.DataFrame(domande_of_user_multichoice.groupby("DMMT_DMML_Id")["DMMO_Testo"].apply(';;;'.join))
+            temp = temp.reset_index()
+            answers_of_user_multichoice = temp.merge(df_domande, left_on="DMMT_DMML_Id", right_on="DMML_Id")
+            # print(answers_of_user_multichoice)
+
+            # get responses of numeric questions
+            answers_of_user_numeric = domande_of_user.merge(df_risposte_numeric,
+                                                                 left_on=["RSQS_Id", "DMML_Id"],
+                                                                 right_on=["RSNM_RSQS_Id", "DMML_Id"])
+            print(answers_of_user_numeric)
+
+            if len(answers_rating) > 0 or len(answers_of_user_short_answer) > 0 or len(answers_of_user_multichoice) > 0 or len(answers_of_user_numeric) > 0:
+                # print(answers_rating["option"].to_dict())
+                # Submit questionnaire responses
+                mod_questionnaire_submit_questionnaire_response(int(id_moodle), int(user.moodleUserId),
+                                                                domande_of_user.to_dict('records')[0]["time_start"],
+                                                                answers_rating, answers_of_user_short_answer,
+                                                                answers_of_user_multichoice, answers_of_user_numeric)
+
+
+def mod_questionnaire_submit_questionnaire_response(questionnaireid, userid, time, answers_rating, answers_of_user_short_answer, answers_of_user_multichoice, answers_of_user_numeric):
     functionname = "local_modcustomfields_generate_questionnaire_responses"
     serverurl = moodle_url  + '&wsfunction=' + functionname
     params  = {"questionnaireid" : questionnaireid, "userid": userid, "time": time}
     questions = {}
     iter = 0
+    print(questionnaireid)
     for answer in answers_rating.itertuples():
-        questions["questions[{}][name]".format(iter)] = answer.DMML_Testo
+        soup = BeautifulSoup(str(answer.DMML_Testo)[:20], 'html.parser')
+        questions["questions[{}][name]".format(iter)] = soup.get_text(strip=True) + "_" + str(answer.DMML_Id)
         questions["questions[{}][values]".format(iter)] = answer.option
+        questions["questions[{}][position]".format(iter)] = answer.LKQD_NumeroDomanda
         iter = iter + 1
     for answer in answers_of_user_short_answer.itertuples():
-        questions["questions[{}][name]".format(iter)] = answer.DMML_Testo
+        soup = BeautifulSoup(str(answer.DMML_Testo)[:20], 'html.parser')
+        questions["questions[{}][name]".format(iter)] = soup.get_text(strip=True) + "_" + str(answer.DMML_Id)
         questions["questions[{}][values]".format(iter)] = answer.RSTL_Testo
+        questions["questions[{}][position]".format(iter)] = answer.LKQD_NumeroDomanda
+        iter = iter + 1
+    for answer in answers_of_user_multichoice.itertuples():
+        soup = BeautifulSoup(str(answer.DMML_Testo)[:20], 'html.parser')
+        questions["questions[{}][name]".format(iter)] = soup.get_text(strip=True) + "_" + str(answer.DMML_Id)
+        questions["questions[{}][values]".format(iter)] = answer.DMMO_Testo
+        questions["questions[{}][position]".format(iter)] = answer.LKQD_NumeroDomanda
+        iter = iter + 1
+    for answer in answers_of_user_numeric.itertuples():
+        soup = BeautifulSoup(str(answer.DMML_Testo)[:20], 'html.parser')
+        questions["questions[{}][name]".format(iter)] = soup.get_text(strip=True) + "_" + str(answer.DMML_Id)
+        questions["questions[{}][values]".format(iter)] = answer.RSNM_Numero
+        questions["questions[{}][position]".format(iter)] = answer.LKQD_NumeroDomanda
         iter = iter + 1
     print(questions)
     res = requests.post(serverurl, params=params, data=questions)

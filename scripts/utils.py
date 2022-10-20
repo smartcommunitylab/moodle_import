@@ -1,6 +1,9 @@
 from bs4 import BeautifulSoup
 import logging, sys
 from config import instance_params
+from base64 import b64encode, b64decode
+from Crypto.Cipher import DES
+from Crypto.Util.Padding import pad, unpad
 
 logging.basicConfig(filename="logging.log", level=logging.INFO, filemode="a", format='%(levelname)s: %(asctime)s: %(message)s')
 logging.getLogger('chardet.charsetprober').setLevel(logging.INFO)
@@ -16,6 +19,7 @@ FILE_REPO = "File.repository"
 
 def clean_text(text):
     resources = []
+    questionnaires = []
     soup = BeautifulSoup(str(text), 'html.parser')
     try:
         for link in soup.find_all('a'):
@@ -24,6 +28,7 @@ def clean_text(text):
                 if ENDPOINT_WIKI in href or ENDPOINT_WIKI2 in href:
                     link.decompose()
                 elif ENDPOINT_QUESTIONNAIRE in href:
+                    extract_questionnaires(href, questionnaires)
                     link.decompose()
                 elif ENDPOINT_MATERIAL in href:
                     resources.append("all")
@@ -33,8 +38,8 @@ def clean_text(text):
                     link.decompose()
     except Exception as err:
         logging.info("Error Message inside clean_text:  %s ", err)
-        return resources, str(soup)
-    return resources, str(soup)
+        return resources, str(soup), questionnaires
+    return resources, str(soup), questionnaires
 
 def extract_resources(href, resources):
     file_id = 0
@@ -68,7 +73,7 @@ def generate_activity_link(cm_id, cm_type):
     return cm_link
 
 def log_generator(message, entity_id = None):
-    logging.info("Error Message :  %s %s", message, entity_id)
+    logging.info("Message :  %s %s", message, entity_id)
 
 def role_mapping(role_id):
     roles_map_existing = {
@@ -80,7 +85,7 @@ def role_mapping(role_id):
           "8": 4, # {'Tutor':"teacher"},
          "29": 3, # {'Docente':"editingteacher"},
          "15": 5,# {'Partecipante':"student"}
-         "44": 9, # Formazione permanente
+         "44": 5, # Formazione permanente
          "10": 10, # Segreteria
          "16": 11, # Esterno
          "17": 12, # Copisteria
@@ -88,3 +93,36 @@ def role_mapping(role_id):
     }
     result = roles_map_existing.get(str(role_id), 5)
     return result
+
+
+def extract_questionnaires(href, resources):
+    qid = 0
+    if ENDPOINT_QUESTIONNAIRE in href:
+        info = href.split("?")[1]
+        qid = decrypt_str(info)
+    if qid not in resources and qid != 0:
+        resources.append(qid)
+    return resources
+
+
+def decrypt_str(element):
+    element = element[element.find("=") + 1:].split("&")[0]
+    elements = decrypt(element).split("&")
+    for el in elements:
+        param = el.split("=")
+        if param[0] == "idq":
+            return int(param[1])
+    return 0
+
+
+def decrypt(element):
+    try:
+        key = "germanic".encode("utf-8")
+        iv_bytes = [0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF]
+        iv = bytearray(iv_bytes)
+        cipher = DES.new(key, DES.MODE_CBC, iv)
+        decrypted_value = unpad(cipher.decrypt(b64decode(element)), 8)
+        return decrypted_value.decode("utf-8")
+    except Exception as err:
+        log_generator(err, "Error during qid decryption: {}".format(element))
+        return 0
