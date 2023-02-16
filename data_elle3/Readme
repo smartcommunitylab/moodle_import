@@ -1,0 +1,16 @@
+Steps to follow to analyse the data of ELLE3 db in order to transform and prepare them for migration into moodle:
+
+Step 1: update file config.ini in order to provide the credentials for connecting with ELLE3 SQL Server DB.
+
+Step2: Execute each of the following python scripts in order to produce the csv files in the format that Moodle is expecting.
+The order in which to run the scripts:
+
+1. mig_an_activ-diario.py
+2. mig_an_categories.py.py
+3. mig_an_questonario.py
+4. mig_an_users.py
+5. mig_an_wiki.py
+6. turbodbc.py
+
+  
+At the end of the execution of each of the scripts the folder 'resources' will be populated with the csv files to be imported into Moodle.
