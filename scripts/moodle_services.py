@@ -674,6 +674,9 @@ def core_user_create_users(dataframe):
         users["users[{}][password]".format(row[0])] = "Password1."
         users["users[{}][customfields][0][type]".format(row[0])] = "codice_fiscale"
         users["users[{}][customfields][0][value]".format(row[0])] = str(row.codice_fiscale)
+        if "provincia.tn.it" in str(row.email):
+            users["users[{}][customfields][0][type]".format(row[0])] = "organizzazione"
+            users["users[{}][customfields][0][value]".format(row[0])] = "PAT"
     if len(users) == 0:
         return
     res = requests.post(serverurl, data=users)

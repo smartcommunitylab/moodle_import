@@ -411,4 +411,7 @@ generate_enrolments_list_diario()
 
 ############################## Create Course containers for importing questionnaires
 #append_container_courses()   # Execute separately - mini step 1
+#df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv")
+#container_questionnaire = df_questionnaires[(df_questionnaires["QSTN_Tipo"] == 0) & (df_questionnaires["IdMoodle"] == 0)]
 #create_course_containers()   # Execute mini step 2
+#import_questionnaire_responses(container_questionnaire) # Execute ministep 3
