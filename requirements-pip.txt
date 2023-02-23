@@ -1,3 +1,4 @@
+pandas
 xmltodict
 beautifulsoup4
 pathlib
