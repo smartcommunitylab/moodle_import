@@ -156,6 +156,7 @@ df_users[df_users["email"] == "francesca.paissan@comune.trento.it"].groupby("ema
 
 
 df_users_result = df_users.sort_values(by="PRSN_ultimoCollegamento", ascending=False).drop_duplicates(subset=["username"], keep="first")
+df_users_result = df_users_result.sort_values(by="PRSN_ultimoCollegamento", ascending=False).drop_duplicates(subset=["email"], keep="first")
 df_users_result
 
 

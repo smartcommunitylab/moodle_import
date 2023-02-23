@@ -45,7 +45,12 @@ def append_duplicated_users():
     df_users_duplicated = pd.read_csv("../resources/users/users_duplicated.csv")
     for user in df_users_duplicated.itertuples():
         moodle_user = df_users_created[df_users_created["username"] == user.username]
-        df_users_duplicated.loc[df_users_duplicated["username"] == user.username, ["moodleUserId"]] = moodle_user[
+        if len(moodle_user) > 1:
+            df_users_duplicated.loc[df_users_duplicated["username"] == user.username, ["moodleUserId"]] = moodle_user[
+            "moodleUserId"].values
+        else:
+            moodle_user = df_users_created[df_users_created["email"] == user.email]
+            df_users_duplicated.loc[df_users_duplicated["email"] == user.email, ["moodleUserId"]] = moodle_user[
             "moodleUserId"].values
     df_result = df_users_created.append(df_users_duplicated)
     # df_result = df_result.drop_duplicates(subset=[""])
