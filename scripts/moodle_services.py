@@ -94,11 +94,11 @@ def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario
             domande = df_domande[df_domande["QSGR_CMNT_Id"] == row[1]]
             course_id = get_course(row.shortname)
             if course_id != -1:
-                update_dataframe(df_courses, "shortname", row.shortname, "idCourseMoodle", int(course_id))
-                continue
+                continue                
                 populate_course_modules(activities, course_id, df_domande_multichoice, df_domande_multichoice_opzioni,
                                         df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario,
                                         domande, materiale, pages, questionnaires, sections, subsections, path_activities)
+                update_dataframe(df_courses, "shortname", row.shortname, "idCourseMoodle", int(course_id))
             else:
                 if len(sections) > 0:
                     numsections = len(sections) + len(subsections)
