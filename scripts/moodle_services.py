@@ -18,17 +18,17 @@ moosh_sudo = ""
 if instance == "prod":
     moosh_sudo = "sudo"
 
-df_courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv")
-df_activities = pd.read_csv("../resources/courses/courses_activities.csv")
-df_materiale = pd.read_csv("../resources/courses/materiale.csv")
-diario_material = pd.read_csv("../resources/courses/diario_material.csv")
-df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv", converters={"QSML_Descrizione": str})
-df_librerie = pd.read_csv("../resources/questionnaire/df_librerie.csv")
+df_courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv" , na_filter=False)
+df_activities = pd.read_csv("../resources/courses/courses_activities.csv" , na_filter=False)
+df_materiale = pd.read_csv("../resources/courses/materiale.csv" , na_filter=False)
+diario_material = pd.read_csv("../resources/courses/diario_material.csv" , na_filter=False)
+df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv", converters={"QSML_Descrizione": str} , na_filter=False)
+df_librerie = pd.read_csv("../resources/questionnaire/df_librerie.csv" , na_filter=False)
 
-df_domande = pd.read_csv("../resources/questionnaire/domande.csv")
-df_domande_multichoice = pd.read_csv("../resources/questionnaire/domande_multichoice.csv")
-df_domande_multichoice_opzioni = pd.read_csv("../resources/questionnaire/domande_multichoice_opzioni.csv")
-df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv")
+df_domande = pd.read_csv("../resources/questionnaire/domande.csv" , na_filter=False)
+df_domande_multichoice = pd.read_csv("../resources/questionnaire/domande_multichoice.csv" , na_filter=False)
+df_domande_multichoice_opzioni = pd.read_csv("../resources/questionnaire/domande_multichoice_opzioni.csv" , na_filter=False)
+df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv" , na_filter=False)
 
 ############################################################## Categories & Courses Services ###################################################
 def get_category(category_name):
@@ -95,6 +95,7 @@ def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario
             course_id = get_course(row.shortname)
             if course_id != -1:
                 update_dataframe(df_courses, "shortname", row.shortname, "idCourseMoodle", int(course_id))
+                continue
                 populate_course_modules(activities, course_id, df_domande_multichoice, df_domande_multichoice_opzioni,
                                         df_domande_rating_headers, df_domande_rating_options, df_dropdown, diario,
                                         domande, materiale, pages, questionnaires, sections, subsections, path_activities)
@@ -322,11 +323,11 @@ def add_module_scorm(course_id, section_id, name, path, duration_hours=0, durati
     if not os.path.exists(path):
         output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o " \
     --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
-    --intro={} --hidebrowse=1 --visibleoncoursepage={}"  scorm {}'.format(name, section_id, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
+    --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3"  scorm {}'.format(name, section_id, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
     else:
         output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o "--packagefilepath={} \
         --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
-        --intro={} --hidebrowse=1 --visibleoncoursepage={} " scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
+        --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3" scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
     print(output)
     return output
     
@@ -664,19 +665,22 @@ def core_user_create_users(dataframe):
     users = {}
     for row in dataframe.itertuples():
         print(row)
-        users["users[{}][username]".format(row[0])] = str(row.username) #username MUST be lowercase
-        users["users[{}][firstname]".format(row[0])] = str(row.firstname)
-        users["users[{}][lastname]".format(row[0])] = str(row.lastname)
-        users["users[{}][city]".format(row[0])] = str(row.city)
-        #users["users[{}][phone1]".format(row[0])] = row[7]
-        #users["users[{}][phone2]".format(row[0])] = row[8]
-        users["users[{}][email]".format(row[0])] = str(row.email)
-        users["users[{}][password]".format(row[0])] = "Password1."
-        users["users[{}][customfields][0][type]".format(row[0])] = "codice_fiscale"
-        users["users[{}][customfields][0][value]".format(row[0])] = str(row.codice_fiscale)
-        if "provincia.tn.it" in str(row.email):
-            users["users[{}][customfields][1][type]".format(row[0])] = "organizzazione"
-            users["users[{}][customfields][1][value]".format(row[0])] = "PAT"
+        existing_user = core_user_get_users_by_field(str(row.username))
+        print(existing_user)
+        if len(existing_user) == 0:
+            users["users[{}][username]".format(row[0])] = str(row.username).replace(" ", "") #username MUST be lowercase
+            users["users[{}][firstname]".format(row[0])] = str(row.firstname)
+            users["users[{}][lastname]".format(row[0])] = str(row.lastname)
+            users["users[{}][city]".format(row[0])] = str(row.city)
+            #users["users[{}][phone1]".format(row[0])] = row[7]
+            #users["users[{}][phone2]".format(row[0])] = row[8]
+            users["users[{}][email]".format(row[0])] = str(row.email)
+            users["users[{}][password]".format(row[0])] = "Password1."
+            users["users[{}][customfields][0][type]".format(row[0])] = "codice_fiscale"
+            users["users[{}][customfields][0][value]".format(row[0])] = str(row.codice_fiscale)
+            if "provincia.tn.it" in str(row.email):
+                users["users[{}][customfields][1][type]".format(row[0])] = "organizzazione"
+                users["users[{}][customfields][1][value]".format(row[0])] = "PAT"
     if len(users) == 0:
         return
     res = requests.post(serverurl, data=users)
@@ -697,8 +701,11 @@ def core_user_delete_users(user_list):
     functionname = "core_user_delete_users"   
     serverurl = moodle_url  + '&wsfunction=' + functionname
     userids = {}
-    for key, val in enumerate(user_list):
-        userids["userids[{}]".format(key)] = int(val)
+    for val in user_list.itertuples():
+        print(val)
+        existing_user = core_user_get_users_by_field(str(val.username))
+        if len(existing_user) > 0:
+            userids["userids[{}]".format(val[0])] = int(existing_user[0]["id"])
     res = requests.post(serverurl, data=userids)
     return json.loads(res.content)
 

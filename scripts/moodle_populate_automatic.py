@@ -8,17 +8,18 @@ from utils import role_mapping
 from config import instance_params
 
 instance = instance_params["instance"]
-df_courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv")
-df_activities = pd.read_csv("../resources/courses/courses_activities.csv")
-df_dependencies = pd.read_csv("../resources/courses/courses_activities_dep.csv")
-df_materiale = pd.read_csv("../resources/courses/materiale.csv")
+df_courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv", na_filter=False)
+df_activities = pd.read_csv("../resources/courses/courses_activities.csv", na_filter=False)
+df_dependencies = pd.read_csv("../resources/courses/courses_activities_dep.csv", na_filter=False)
+df_materiale = pd.read_csv("../resources/courses/materiale.csv", na_filter=False)
 
 def delete_users():
     '''
      Delete existing users
     '''
-    df_users_instance = pd.read_csv("../resources/users/users_{}.csv".format(instance))
-    core_user_delete_users(df_users_instance["moodleUserId"])
+    df_users_instance = pd.read_csv("../resources/users/users.csv", chunksize=100, na_filter=False)
+    for blocks in df_users_instance:
+        core_user_delete_users(blocks)
 
 def creating_users(df):
     core_user_create_users(df)
@@ -27,22 +28,18 @@ def create_users():
     '''
     Create users
     '''
-    pool = mp.Pool(mp.cpu_count()) # use 4 processes
-
-    #df_users = pd.read_csv("../resources/users/users.csv", nrows=2)
-
-    df_users = pd.read_csv("../resources/users/users.csv", chunksize=100)
+    df_users = pd.read_csv("../resources/users/users.csv", chunksize=100, na_filter=False)
     for blocks in df_users:
-        df_users_created = pd.read_csv("../resources/users/users_{}.csv".format(instance))
-        blocks = blocks[~blocks["username"].isin(df_users_created["usernameMoodle"])]
+        #df_users_created = pd.read_csv("../resources/users/users_{}.csv".format(instance))
+        #blocks = blocks[~blocks["username"].isin(df_users_created["usernameMoodle"])]
         core_user_create_users(blocks)
 
 
 
 def append_duplicated_users():
     # After creating unique users let's merge with the duplicated users in order to link them with the same moodle user account
-    df_users_created = pd.read_csv("../resources/users/users_{}.csv".format(instance))
-    df_users_duplicated = pd.read_csv("../resources/users/users_duplicated.csv")
+    df_users_created = pd.read_csv("../resources/users/users_{}.csv".format(instance), na_filter=False)
+    df_users_duplicated = pd.read_csv("../resources/users/users_duplicated.csv", na_filter=False)
     for user in df_users_duplicated.itertuples():
         moodle_user = df_users_created[df_users_created["username"] == user.username]
         if len(moodle_user) > 1:
@@ -61,34 +58,34 @@ def create_all_categories():
     '''
     Create Categories
     '''
-    categories = pd.read_csv("../resources/courses/categories_pat_tsm.csv")
+    categories = pd.read_csv("../resources/courses/categories_pat_tsm.csv", na_filter=False)
     create_categories(categories)
 
 def create_courses():
     '''
     Create Courses
     '''
-    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv", chunksize=50)
-    sections = pd.read_csv("../resources/courses/courses_sections.csv")
+    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv", chunksize=50, na_filter=False)
+    sections = pd.read_csv("../resources/courses/courses_sections.csv", na_filter=False)
     sections["Description"] = sections["Description"].fillna("")
-    sub_sections = pd.read_csv("../resources/courses/courses_sections_sub.csv")
-    df_diario = pd.read_csv("../resources/courses/diario.csv")
+    sub_sections = pd.read_csv("../resources/courses/courses_sections_sub.csv", na_filter=False)
+    df_diario = pd.read_csv("../resources/courses/diario.csv", na_filter=False)
 
-    df_domande = pd.read_csv("../resources/questionnaire/domande.csv")
-    df_domande_rating_options = pd.read_csv("../resources/questionnaire/domande_rating_options.csv")
-    df_domande_rating_headers = pd.read_csv("../resources/questionnaire/domande_rating_headers.csv")
+    df_domande = pd.read_csv("../resources/questionnaire/domande.csv", na_filter=False)
+    df_domande_rating_options = pd.read_csv("../resources/questionnaire/domande_rating_options.csv", na_filter=False)
+    df_domande_rating_headers = pd.read_csv("../resources/questionnaire/domande_rating_headers.csv", na_filter=False)
 
-    df_domande_multichoice = pd.read_csv("../resources/questionnaire/domande_multichoice.csv")
-    df_domande_multichoice_opzioni = pd.read_csv("../resources/questionnaire/domande_multichoice_opzioni.csv")
-    df_pages = pd.read_csv("../resources/questionnaire/questionario_pages.csv")
+    df_domande_multichoice = pd.read_csv("../resources/questionnaire/domande_multichoice.csv", na_filter=False)
+    df_domande_multichoice_opzioni = pd.read_csv("../resources/questionnaire/domande_multichoice_opzioni.csv", na_filter=False)
+    df_pages = pd.read_csv("../resources/questionnaire/questionario_pages.csv", na_filter=False)
     
-    df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv")
+    df_dropdown = pd.read_csv("../resources/questionnaire/domande_dropdown.csv", na_filter=False)
 
     for block in courses:
         #536, 1775,
         # 1793,2863,2884,3005,3006,3011,1775,3014,3015,3016,3017
         #temp = block[(block['IdCommunity'].isin([1750]) ) & (block['Id_Path'].isin([234]))] # 1795 3077
-        temp = block[block['IdCommunity'].isin([1795]) ]
+        temp = block[block['IdCommunity'].isin([2818]) ]
         #For_Sal_e_Sic_1750_262
         #temp = block[block["shortname"] == "Sic_Can___2__121_container"]
         # "Key___San_sti_1796_10325"
@@ -97,8 +94,8 @@ def create_courses():
         #courses.iloc[383:385, :]
         #temp = block[block['category'] == "Formazione lavoratori - aggiornamento - rischio basso"]
         temp = temp[(~temp["shortname"].str.endswith("_container"))]
-        if len(temp) > 0:
-            core_course_create_courses(temp, sections, sub_sections, df_diario, df_activities, \
+        if len(block) > 0:
+            core_course_create_courses(block, sections, sub_sections, df_diario, df_activities, \
                                        df_domande, df_domande_rating_options, df_domande_rating_headers, \
                                        df_domande_multichoice, df_domande_multichoice_opzioni, df_pages, df_dropdown)
 
@@ -164,7 +161,7 @@ def config_blocks():
     '''
     Create Blocks
     '''
-    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv")
+    courses = pd.read_csv("../resources/courses/courses_pat_tsm.csv", na_filter=False)
     courses = courses[(~courses["idCourseMoodle"].isna()) & (courses["idCourseMoodle"] != 0)]
     create_blocks(courses)
     
@@ -189,19 +186,19 @@ def generate_enrolments_list_diario():
     Generate enrolments list
     '''
     df_tipo_ruolo = pd.read_csv("../resources/users/TIPO_RUOLO.csv")
-    df_users = pd.read_csv("../resources/users/users.csv")
+    df_users = pd.read_csv("../resources/users/users.csv", na_filter=False)
     df_iscrizioni = pd.read_csv('../resources/users/LK_RUOLO_PERSONA_COMUNITA.csv')
     df_iscrizioni = df_iscrizioni[df_iscrizioni["RLPC_PRSN_id"].isin(df_users['PRSN_id'])]
     df_iscrizioni = df_iscrizioni[['RLPC_CMNT_id', 'RLPC_PRSN_id', 'RLPC_TPRL_id']]
     df_iscrizioni = df_iscrizioni.merge(df_tipo_ruolo, left_on="RLPC_TPRL_id", right_on="TPRL_id")
     df_iscrizioni["roleId"] = df_iscrizioni["RLPC_TPRL_id"].apply(lambda x: role_mapping(x))
 
-    df_courses_pat_moodle = pd.read_csv("../resources/courses/courses_pat_tsm.csv")
+    df_courses_pat_moodle = pd.read_csv("../resources/courses/courses_pat_tsm.csv", na_filter=False)
     df_courses_pat_moodle = df_courses_pat_moodle[(df_courses_pat_moodle["idCourseMoodle"].notna()) & (df_courses_pat_moodle["idCourseMoodle"] != 0)]
     #df_courses_pat_moodle = df_courses_pat_moodle[df_courses_pat_moodle["IdCommunity"] == 1750]
     df_com_iscriz = df_courses_pat_moodle.merge(df_iscrizioni[df_iscrizioni["RLPC_TPRL_id"]  != -3], left_on="IdCommunity", right_on="RLPC_CMNT_id")
 
-    df_user_moodle = pd.read_csv("../resources/users/users_{}.csv".format(instance))
+    df_user_moodle = pd.read_csv("../resources/users/users_{}.csv".format(instance), na_filter=False)
     df_com_iscriz_user = df_com_iscriz.merge(df_user_moodle, left_on="RLPC_PRSN_id", right_on="PRSN_id")
     result_df = df_com_iscriz_user[["idCourseMoodle", "Id_Path", "moodleUserId", "roleId", "TPRL_nome"]]
     result_df = result_df.drop_duplicates(subset=["IdCommunity", "moodleUserId", "roleId", "TPRL_nome"])
@@ -348,13 +345,15 @@ def import_quiz_responses():
     # Import responses of random quiz
     questionnaire_import_responses_quiz(df_questionnaires_random, df_users, df_risposte_domande_random_quiz, df_risposte_multichoice)
 
-def import_questionnaire_responses():
+def import_questionnaire_responses(questionnaires=False):
     '''
     Import the quiz responses given by each user
     :return:
     '''
     df_questionnaires = pd.read_csv("../resources/questionnaire/questionnaires.csv")
     df_questionnaires = df_questionnaires[(df_questionnaires["QSTN_Tipo"] == 0)]
+    if questionnaires:
+        df_questionnaires = questionnaires
     # [1793,2863,2884,3005,3006,3011,1775,3014,3015,3016,3017]
     #df_questionnaires = df_questionnaires[(df_questionnaires["QSTN_Id"].isin([3180]))]
     df_users = pd.read_csv("../resources/users/users_{}.csv".format(instance))
@@ -375,13 +374,13 @@ def import_questionnaire_responses():
 ############################## STEP 0: Delete existing users
 #delete_users()
 ############################## STEP 1: Create users
-#create_users()
+create_users()
 ############################## Append duplicated users
 # append_duplicated_users()
 ############################## STEP 2: Create Categories
 #create_all_categories()
 ############################## STEP 3: Create Courses
-create_courses()
+#create_courses()
 
 # PHASE 2
 
@@ -390,9 +389,9 @@ create_courses()
 ############################## STEP 5: Config Blocks
 #config_blocks()
 ############################## STEP 6: Generate groups
-
+#### create_groups_in_courses()  # not used anymore since we create group when generating enrolments
 ############################## STEP 7: Generate enrolments list
-generate_enrolments_list_diario()
+#generate_enrolments_list_diario()
 #generate_groups_percorso()
 ############################## STEP 8: Enrol users to courses
 #enrol_users_to_courses()
