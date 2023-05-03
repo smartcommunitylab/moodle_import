@@ -201,7 +201,7 @@ def populate_course_diario(course_id, diario, materiale, questionnaires, domande
         embedded_material = extract[0]
         embedded_questionnaires = extract[2]
         embedded.extend(embedded_material)
-        subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id + 1, course_id, row.Section_Name), shell=True).decode("utf-8").strip()
+        subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id + 1, course_id, row.Section_Name.replace('"','\\"')), shell=True).decode("utf-8").strip()
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} summary "{}"'.format(curr_id + 1, course_id,
                                                                                                                 programma_svolto), shell=True).decode("utf-8").strip()
         # Add material embedded in the section's description
@@ -237,7 +237,7 @@ def course_update_sections(course_id, sections, df_subsections, df_activities, q
         embedded_material = extract[0]
         embedded_questionnaires = extract[2]
 
-        subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id, course_id, row.Name), shell=True).decode("utf-8").strip()
+        subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} name "{}"'.format(curr_id, course_id, row.Name.replace('"','\\"')), shell=True).decode("utf-8").strip()
         subprocess.check_output(moosh_sudo + ' moosh -n section-config-set -s {} course {} summary "{}"'.format(curr_id, course_id, description), shell=True).decode("utf-8").strip()
         curr_id += 1
         subsections = df_subsections[df_subsections["Id_section"] == row.Id].sort_values(by="DisplayOrder")
@@ -323,11 +323,11 @@ def add_module_scorm(course_id, section_id, name, path, duration_hours=0, durati
     if not os.path.exists(path):
         output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o " \
     --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
-    --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3"  scorm {}'.format(name, section_id, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
+    --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3"  scorm {}'.format(name.replace('"','\\"'), section_id, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
     else:
         output = subprocess.check_output(moosh_sudo + ' moosh -n activity-add -n "{}" --section {} -o "--packagefilepath={} \
         --customfield_duration_hours={} --customfield_duration_mins={} --completion=2 --completionview=1 --completionscoredisabled=1 --completionstatusrequired=4 \
-        --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3" scorm {}'.format(name, section_id, path, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
+        --intro={} --hidebrowse=1 --visibleoncoursepage={} --skipview=2 --hidetoc=3 --displaycoursestructure=0 --displayattemptstatus=3" scorm {}'.format(name.replace('"','\\"'), section_id, path, duration_hours, duration_min, intro, visibleoncoursepage, course_id), shell=True).decode("utf-8").strip()
     print(output)
     return output
     
