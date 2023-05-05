@@ -69,9 +69,9 @@ def create_categories(dataframe):
             categ_resp = core_course_create_categories(row[3], parent)
             print("category creation: {}".format(categ_resp))
             create_question_bank(row[1], categ_resp[0]["id"])
-        else:
-            print("category update: {}".format(categ_resp))
-            create_question_bank(row[1], current)
+        #else:
+        #    print("category update: {}".format(current))
+        #    create_question_bank(row[1], current)
 
 
 def core_course_create_courses(dataframe, df_sections, df_subsections, df_diario, df_activities, \
