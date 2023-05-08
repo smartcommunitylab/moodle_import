@@ -40,7 +40,9 @@ def activities_dependencies(df_activities, df_dependencies):
             moodle_source_activity_module = moodle_source[0]["moduleMoodle"]
             moodle_target_activity_id = moodle_target[0]["IdMoodle"]
             moodle_target_activity_module = moodle_target[0]["moduleMoodle"]
-            if moodle_source_activity_id is not None and moodle_target_activity_id is not None:
+            if moodle_source_activity_id is not None and moodle_target_activity_id is not None and \
+               pd.notna(moodle_source_activity_id) and pd.notna(moodle_target_activity_id) and \
+               moodle_source_activity_id != '' and moodle_target_activity_id != '':
                 params = {"sourceactivity" : int(moodle_source_activity_id), "sourcemodule" : moodle_source_activity_module, \
                          "targetactivity" : int(moodle_target_activity_id), "targetmodule" : moodle_target_activity_module}
                 print(params)
